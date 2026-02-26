@@ -47,6 +47,8 @@ class Config:
         self.human.num_humans = 20
         self.human.human_num_range = 0
         self.human.randomize_attributes = True
+        # Whether to apply GMM perturbation to human actions in env.step.
+        self.human.use_gmm = False
         # Human goal changing behavior
         self.human.random_goal_changing = False
         self.human.goal_change_chance = 0.5

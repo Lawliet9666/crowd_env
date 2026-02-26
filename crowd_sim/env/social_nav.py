@@ -72,6 +72,7 @@ class SocialNav(gym.Env):
         self.human_circle_radius = self.arena_size * np.sqrt(2) 
 
         self.human_policy_name = human_params.get('policy', 'nominal')
+        self.human_use_gmm = bool(human_params.get('use_gmm', True))
         self.random_goal_changing = bool(human_params.get('random_goal_changing', False))
         self.goal_change_chance = float(np.clip(human_params.get('goal_change_chance', 0.0), 0.0, 1.0))
         self.end_goal_changing = bool(human_params.get('end_goal_changing', False))
@@ -168,7 +169,8 @@ class SocialNav(gym.Env):
             self.human_vmaxs,
             self.human_radii,
         ) = self._init_robot_humans(options=options)
-        self._seed_human_noise_models()
+        if self.human_use_gmm:
+            self._seed_human_noise_models()
 
         # 4. Reset Internal Dynamics Models
         # Robot: [x, y, theta, v]
@@ -309,13 +311,16 @@ class SocialNav(gym.Env):
             for i, human in enumerate(self.humans):
                 nominal_actions[i] = human.nominal_controller(self.human_positions[i], self.human_goals[i])
 
-        exec_actions = HumanIntegrator.apply_gmm_batch(
-            humans=self.humans,
-            nominal_actions=nominal_actions,
-            states=self.human_positions,
-            goals=self.human_goals,
-            radii=self.human_radii,
-        )
+        if self.human_use_gmm:
+            exec_actions = HumanIntegrator.apply_gmm_batch(
+                humans=self.humans,
+                nominal_actions=nominal_actions,
+                states=self.human_positions,
+                goals=self.human_goals,
+                radii=self.human_radii,
+            )
+        else:
+            exec_actions = np.asarray(nominal_actions, dtype=np.float32)
 
         # 3. human state update
         for i, human in enumerate(self.humans):
