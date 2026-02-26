@@ -117,6 +117,40 @@ class SocialForceHelper:
         action = self.policy.predict_from_states(self._self_state, self._neighbor_pool[:n])
         return np.array([action.vx, action.vy], dtype=np.float32)
 
+    def action_for_humans(
+        self,
+        human_positions,
+        human_vels,
+        human_goals,
+        human_radii,
+        human_vprefs,
+        robot_pos=None,
+        robot_vel=None,
+        robot_radius=0.3,
+        robot_vpref=1.0,
+        include_robot=None,
+    ):
+        num_humans = len(human_positions)
+        if num_humans == 0:
+            return np.zeros((0, 2), dtype=np.float32)
+
+        actions = np.zeros((num_humans, 2), dtype=np.float32)
+        for i in range(num_humans):
+            actions[i] = self.action_for_human(
+                human_idx=i,
+                human_positions=human_positions,
+                human_vels=human_vels,
+                human_goals=human_goals,
+                human_radii=human_radii,
+                human_vprefs=human_vprefs,
+                robot_pos=robot_pos,
+                robot_vel=robot_vel,
+                robot_radius=robot_radius,
+                robot_vpref=robot_vpref,
+                include_robot=include_robot,
+            )
+        return actions
+
     def action_for_robot(
         self,
         robot_pos,

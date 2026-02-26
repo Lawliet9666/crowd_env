@@ -28,7 +28,7 @@ python test_env.py --seed 42 --save_path trained_models/test.gif
 | `--seed` | `0` | Random seed |
 | `--steps` | `200` | Max steps per episode |
 | `--save_path` | `trained_models/<env>.gif` | Output GIF path |
-| `--obs_num` | `20` | Number of pedestrians |
+| `--human_num` | `20` | Number of pedestrians |
 
 ## Configuration
 

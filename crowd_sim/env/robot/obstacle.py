@@ -1,5 +1,3 @@
-
-from os import error
 import numpy as np
 from crowd_sim.env.robot.agents import RobotModel
 
@@ -26,46 +24,62 @@ class GMMNoiseModel:
         self.base_weights = self.weights_.copy()
         self.base_stds = np.array(stds)
         self.lateral_ratio = float(lateral_ratio)
+        # Closed-form normalization factor for left/right components.
+        self._lat_scale = 1.0 / np.sqrt(1.0 + self.lateral_ratio * self.lateral_ratio)
         
         self.rng = np.random.default_rng(seed)
 
-    def _build_component_means(self, nominal_action):
+    def _build_component_mean(self, nominal_action, component_idx):
         v = np.asarray(nominal_action, dtype=float)
-        speed = np.linalg.norm(v)
-        if speed < 1e-6:
-            means = np.stack([v, v, v])
-            return means, 0.0
+        vx, vy = float(v[0]), float(v[1])
+        speed_sq = vx * vx + vy * vy
+        if speed_sq < 1e-12:
+            return v, 0.0
 
-        f = v / speed
-        left = np.array([-f[1], f[0]])
-        lat_mag = self.lateral_ratio * speed
+        speed = np.sqrt(speed_sq)
+        idx = int(component_idx)
+        if idx == 0:
+            return np.array([vx, vy], dtype=float), speed
 
-        mu0 = v
-        muL = v + lat_mag * left
-        muR = v - lat_mag * left
+        r = self.lateral_ratio
+        s = self._lat_scale
+        if idx == 1:
+            mu = np.array([s * (vx - r * vy), s * (vy + r * vx)], dtype=float)
+        elif idx == 2:
+            mu = np.array([s * (vx + r * vy), s * (vy - r * vx)], dtype=float)
+        else:
+            raise ValueError(f"Invalid component index: {component_idx}")
 
-        # Preserve original speed for left/right modes
-        for mu in (muL, muR):
-            mu_norm = np.linalg.norm(mu)
-            if mu_norm > 1e-6:
-                mu[:] = mu / mu_norm * speed
+        return mu, speed
 
-        means = np.stack([mu0, muL, muR], axis=0)
-        return means, speed
+    # def _sample_component_indices(self, size):
+    #     size = int(size)
+    #     if size <= 0:
+    #         return np.zeros((0,), dtype=np.int64)
 
+    #     n_comp = int(len(self.weights_))
+    #     if n_comp == 3:
+    #         # Faster than rng.choice(..., p=...) for fixed 3-component mixtures.
+    #         u = self.rng.random(size)
+    #         t0 = float(self.weights_[0])
+    #         t1 = t0 + float(self.weights_[1])
+    #         idx = np.zeros(size, dtype=np.int64)
+    #         idx[u >= t0] = 1
+    #         idx[u >= t1] = 2
+    #         return idx
+
+    #     return self.rng.choice(n_comp, size=size, p=self.weights_).astype(np.int64, copy=False)
 
     def sample(self, nominal_action=None):
-        # 1. Select Component
-        component_idx = self.rng.choice(len(self.weights_), p=self.weights_)
-        
-        # 2. Sample velocity from selected component
-        means, _ = self._build_component_means(nominal_action)
-        mu = means[component_idx]
+        # 1. Select component
+        # component_idx = int(self._sample_component_indices(1)[0])
+        component_idx = int(self.rng.choice(len(self.weights_), p=self.weights_))
 
-        # For spherical, covariance contains variances (sigma^2)
+        # 2. Build mean of selected component
+        mu, _ = self._build_component_mean(nominal_action, component_idx)
+
+        # 3. Sample velocity from selected spherical covariance (sigma^2)
         sigma = np.sqrt(self.covariances_[component_idx])
-
-        # Disable speed-based scaling for now (always scale = 1.0)
         sample = self.rng.normal(mu, sigma, size=2)
         
         return sample
@@ -121,10 +135,48 @@ class SingleIntegrator(RobotModel):
         nominal_action = k_p * error        
         # Clip action magnitude
         action = nominal_action
-        speed = np.linalg.norm(action)
-        if speed > self.vmax:
-            action = action / speed * self.vmax
+        # speed = np.linalg.norm(action)
+        # if speed > self.vmax:
+            # action = action / speed * self.vmax
         return action
+
+    @staticmethod
+    def apply_gmm_batch(humans, nominal_actions, states=None, goals=None, radii=None):
+        """
+        Batch GMM perturbation for multiple humans.
+        Each human samples its own component index and Gaussian noise independently.
+        """
+        actions = np.asarray(nominal_actions, dtype=float)
+        if actions.ndim == 1:
+            actions = actions.reshape(1, 2)
+        if actions.shape[1] != 2:
+            raise ValueError(f"Expected nominal_actions with shape (N, 2), got {actions.shape}")
+
+        num_humans = int(actions.shape[0])
+        if num_humans == 0:
+            return np.zeros((0, 2), dtype=np.float32)
+        if len(humans) != num_humans:
+            raise ValueError(f"humans length ({len(humans)}) must match nominal_actions ({num_humans})")
+
+        out = actions.copy()
+
+        if states is not None and goals is not None:
+            states_arr = np.asarray(states, dtype=float).reshape(num_humans, 2)
+            goals_arr = np.asarray(goals, dtype=float).reshape(num_humans, 2)
+            if radii is None:
+                radii_arr = np.array([float(getattr(h, "radius", 0.0)) for h in humans], dtype=float)
+            else:
+                radii_arr = np.asarray(radii, dtype=float).reshape(num_humans)
+            dist = np.linalg.norm(goals_arr - states_arr, axis=1)
+            noise_mask = dist >= (2.0 * radii_arr)
+        else:
+            noise_mask = np.ones((num_humans,), dtype=bool)
+
+        noisy_idx = np.nonzero(noise_mask)[0]
+        for i in noisy_idx:
+            out[i] = humans[i].gmm.sample(nominal_action=out[i])
+
+        return out.astype(np.float32, copy=False)
 
     def apply_gmm(self, action, state=None, goal=None):
         """
@@ -132,10 +184,10 @@ class SingleIntegrator(RobotModel):
         Optionally skip noise when close to goal.
         """
         dist = np.linalg.norm(goal - state)
-        if dist < self.radius - 0.1:
+        if dist < self.radius*2:
             return action
 
-        speed = np.linalg.norm(action)
+        # speed = np.linalg.norm(action)
         action = self.gmm.sample(nominal_action=action)
 
         # speed = np.linalg.norm(action)

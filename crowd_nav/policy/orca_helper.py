@@ -1,4 +1,5 @@
 import numpy as np
+import rvo2
 from crowd_nav.policy.orca import ORCA
 
 
@@ -23,9 +24,13 @@ class ORCAHelper:
         self.policy.time_step = dt
         self._self_state = OrcaAgentState()
         self._neighbor_pool = [OrcaAgentState() for _ in range(max(1, int(max_humans) + 1))]
+        self._multi_sim = None
+        self._multi_total_agents = 0
 
     def reset(self):
         self.policy.sim = None
+        self._multi_sim = None
+        self._multi_total_agents = 0
 
     def _ensure_neighbor_pool(self, required):
         required = max(1, int(required))
@@ -109,6 +114,98 @@ class ORCAHelper:
 
         action = self.policy.predict_from_states(self._self_state, self._neighbor_pool[:n])
         return np.array([action.vx, action.vy], dtype=np.float32)
+
+    def action_for_humans(
+        self,
+        human_positions,
+        human_vels,
+        human_goals,
+        human_radii,
+        human_vprefs,
+        robot_pos=None,
+        robot_vel=None,
+        robot_radius=0.3,
+        robot_vpref=1.0,
+        include_robot=None,
+    ):
+        num_humans = len(human_positions)
+        if num_humans == 0:
+            return np.zeros((0, 2), dtype=np.float32)
+
+        if include_robot is None:
+            include_robot = bool(self.orca_params.get("avoid_robot", True))
+        include_robot = bool(include_robot) and robot_pos is not None and robot_vel is not None
+
+        total_agents = num_humans + (1 if include_robot else 0)
+        max_neighbors = max(total_agents - 1, 0)
+        params = (
+            self.policy.neighbor_dist,
+            max_neighbors,
+            self.policy.time_horizon,
+            self.policy.time_horizon_obst,
+        )
+
+        if self._multi_sim is None or self._multi_total_agents != total_agents:
+            self._multi_sim = rvo2.PyRVOSimulator(
+                self.policy.time_step,
+                *params,
+                self.policy.radius if self.policy.radius is not None else 0.3,
+                self.policy.max_speed,
+            )
+            for i in range(num_humans):
+                max_speed = self._val_at(human_vprefs, i)
+                self._multi_sim.addAgent(
+                    (float(human_positions[i][0]), float(human_positions[i][1])),
+                    *params,
+                    float(self._val_at(human_radii, i)) + 0.01 + self.policy.safety_space,
+                    max_speed,
+                    (float(human_vels[i][0]), float(human_vels[i][1])),
+                )
+            if include_robot:
+                self._multi_sim.addAgent(
+                    (float(robot_pos[0]), float(robot_pos[1])),
+                    *params,
+                    float(robot_radius) + 0.01 + self.policy.safety_space,
+                    float(robot_vpref),
+                    (float(robot_vel[0]), float(robot_vel[1])),
+                )
+            self._multi_total_agents = total_agents
+        else:
+            for i in range(num_humans):
+                self._multi_sim.setAgentPosition(i, (float(human_positions[i][0]), float(human_positions[i][1])))
+                self._multi_sim.setAgentVelocity(i, (float(human_vels[i][0]), float(human_vels[i][1])))
+            if include_robot:
+                self._multi_sim.setAgentPosition(num_humans, (float(robot_pos[0]), float(robot_pos[1])))
+                self._multi_sim.setAgentVelocity(num_humans, (float(robot_vel[0]), float(robot_vel[1])))
+
+        for i in range(num_humans):
+            goal_vec = np.array(
+                [
+                    float(human_goals[i][0]) - float(human_positions[i][0]),
+                    float(human_goals[i][1]) - float(human_positions[i][1]),
+                ],
+                dtype=float,
+            )
+            speed = np.linalg.norm(goal_vec)
+            v_pref = max(0.0, float(self._val_at(human_vprefs, i)))
+            if speed > 1e-6 and v_pref > 0.0:
+                pref_speed = min(speed, v_pref)
+                pref_vel = goal_vec / speed * pref_speed
+            else:
+                pref_vel = np.zeros(2, dtype=float)
+            self._multi_sim.setAgentPrefVelocity(i, (float(pref_vel[0]), float(pref_vel[1])))
+
+        if include_robot:
+            # Humans avoid robot as a dynamic obstacle; robot intent is unknown here.
+            self._multi_sim.setAgentPrefVelocity(num_humans, (0.0, 0.0))
+
+        self._multi_sim.doStep()
+        actions = np.zeros((num_humans, 2), dtype=np.float32)
+        for i in range(num_humans):
+            vx, vy = self._multi_sim.getAgentVelocity(i)
+            actions[i, 0] = float(vx)
+            actions[i, 1] = float(vy)
+        return actions
 
     def action_for_robot(
         self,

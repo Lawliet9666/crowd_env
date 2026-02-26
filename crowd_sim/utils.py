@@ -3,7 +3,6 @@ import os
 
 import numpy as np
 from config.config import Config
-import torch
  
 
 def parse_obstacles(obs):
@@ -79,11 +78,13 @@ def to_jsonable(obj):
         return obj.tolist()
     if isinstance(obj, (np.integer, np.floating)):
         return obj.item()
-    if torch is not None:
-        if isinstance(obj, torch.device):
-            return str(obj)
-        if isinstance(obj, torch.Tensor):
+    type_module = type(obj).__module__
+    type_name = type(obj).__name__
+    if type_module.startswith("torch"):
+        if hasattr(obj, "detach") and hasattr(obj, "cpu"):
             return obj.detach().cpu().tolist()
+        if type_name == "device":
+            return str(obj)
     if isinstance(obj, dict):
         return {str(k): to_jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple, set)):

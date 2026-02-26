@@ -1,11 +1,11 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-import matplotlib.pyplot as plt
 from crowd_sim.env.robot.robot import SingleIntegrator, Unicycle, UnicycleDynamic
 from crowd_sim.env.robot.obstacle import SingleIntegrator as HumanIntegrator
 from crowd_nav.policy.orca_helper import ORCAHelper
 from crowd_nav.policy.social_force_helper import SocialForceHelper
+from crowd_nav.policy.potential_field_helper import PotentialFieldHelper
 from crowd_sim.utils import sample_point_in_disk
 
 
@@ -80,8 +80,10 @@ class SocialNav(gym.Env):
 
         self.orca_params = human_params.get('orca', {})
         self.sf_params = human_params.get('sf', {})
+        self.pf_params = human_params.get('pf', {})
         self.orca_helper = None
         self.sf_helper = None
+        self.pf_helper = None
         if self.human_policy_name == 'orca':
             self.orca_helper = ORCAHelper(
                 dt=self.dt,
@@ -92,6 +94,12 @@ class SocialNav(gym.Env):
             self.sf_helper = SocialForceHelper(
                 dt=self.dt,
                 sf_params=self.sf_params,
+                max_humans=self.num_humans,
+            )
+        elif self.human_policy_name == 'potential_field':
+            self.pf_helper = PotentialFieldHelper(
+                dt=self.dt,
+                pf_params=self.pf_params,
                 max_humans=self.num_humans,
             )
 
@@ -126,9 +134,11 @@ class SocialNav(gym.Env):
         self.safe_shaping_band = rew_params.get('safe_shaping_band', 0.6)
 
         self.max_abs_pot_reward = self.dt * self.robot.vmax * self.potential_factor
-        # maximum absolute value of rotation penalty
-        # self.max_abs_rot_penalty = self.spin_factor * max(abs(self.robot.w_min), self.robot.w_max) ** 2
-        self.max_abs_rot_penalty = self.spin_factor * (max(abs(self.robot.w_min), self.robot.w_max) * self.dt)** 2
+        # maximum absolute value of rotation penalty (only meaningful for unicycle robots)
+        if self.robot_type == 'unicycle':
+            self.max_abs_rot_penalty = self.spin_factor * (max(abs(self.robot.w_min), self.robot.w_max) * self.dt) ** 2
+        else:
+            self.max_abs_rot_penalty = 0.0
         self.max_abs_back_penalty = self.back_factor * max(abs(self.robot.vmin), self.robot.vmax)
 
     def reset(self, seed=None, options=None):
@@ -136,12 +146,11 @@ class SocialNav(gym.Env):
         super().reset(seed=seed)
         self.current_step = 0
         self.current_scenario = options.get("scenario") if options else None
-        if seed is not None:
-            for i, human in enumerate(self.humans):
-                human.gmm.set_seed(seed + i)
         
         if self.orca_helper is not None:
             self.orca_helper.reset()
+        if self.pf_helper is not None:
+            self.pf_helper.reset()
             
         # 2. Initialize Trajectory Storage
         self.robot_traj = []
@@ -159,6 +168,7 @@ class SocialNav(gym.Env):
             self.human_vmaxs,
             self.human_radii,
         ) = self._init_robot_humans(options=options)
+        self._seed_human_noise_models()
 
         # 4. Reset Internal Dynamics Models
         # Robot: [x, y, theta, v]
@@ -175,8 +185,18 @@ class SocialNav(gym.Env):
         self.robot_traj.append(self.robot_pos.copy())
         for i in range(self.num_humans):
             self.human_trajs[i].append(self.human_positions[i].copy())
-        
+            
         return self._get_obs(), {}
+    
+    def _seed_human_noise_models(self, seed=None):
+        max_seed = np.iinfo(np.uint32).max
+        if seed is not None:
+            base_seed = int(seed) % max_seed
+        else:
+            base_seed = int(self.np_random.integers(0, max_seed))
+        for i, human in enumerate(self.humans):
+            human.gmm.set_seed((base_seed + i) % max_seed)
+
 
     def step(self, action):
         # 1. robot position update
@@ -247,43 +267,59 @@ class SocialNav(gym.Env):
     def _update_human_states(self):
         # optional human goal update
         self._update_obstacle_goals()
-        # 3. human update
-        for i, human in enumerate(self.humans):
-            if self.human_policy_name == 'orca':
-                action_human = self.orca_helper.action_for_human(
-                    human_idx=i,
-                    human_positions=self.human_positions,
-                    human_vels=self.human_vels,
-                    human_goals=self.human_goals,
-                    human_radii=self.human_radii,
-                    human_vprefs=self.human_vmaxs,
-                    robot_pos=self.robot_pos,
-                    robot_vel=self.robot_vel,
-                    robot_radius=self.robot_radius,
-                    robot_vpref=float(getattr(self.robot, "vmax", 1.0)),
-                )
-            elif self.human_policy_name == 'social_force':
-                action_human = self.sf_helper.action_for_human(
-                    human_idx=i,
-                    human_positions=self.human_positions,
-                    human_vels=self.human_vels,
-                    human_goals=self.human_goals,
-                    human_radii=self.human_radii,
-                    human_vprefs=self.human_vmaxs,
-                    robot_pos=self.robot_pos,
-                    robot_vel=self.robot_vel,
-                    robot_radius=self.robot_radius,
-                    robot_vpref=float(getattr(self.robot, "vmax", 1.0)),
-                )
-            else:
-                action_human = human.nominal_controller(self.human_positions[i], self.human_goals[i])
-            # Apply GMM perturbation after action is generated
-            action_human = human.apply_gmm(
-                action_human,
-                state=self.human_positions[i],
-                goal=self.human_goals[i],
+
+        if self.human_policy_name == 'orca':
+            nominal_actions = self.orca_helper.action_for_humans(
+                human_positions=self.human_positions,
+                human_vels=self.human_vels,
+                human_goals=self.human_goals,
+                human_radii=self.human_radii,
+                human_vprefs=self.human_vmaxs,
+                robot_pos=self.robot_pos,
+                robot_vel=self.robot_vel,
+                robot_radius=self.robot_radius,
+                robot_vpref=float(getattr(self.robot, "vmax", 1.0)),
             )
-            human.step(action_human)
+        elif self.human_policy_name == 'social_force':
+            nominal_actions = self.sf_helper.action_for_humans(
+                human_positions=self.human_positions,
+                human_vels=self.human_vels,
+                human_goals=self.human_goals,
+                human_radii=self.human_radii,
+                human_vprefs=self.human_vmaxs,
+                robot_pos=self.robot_pos,
+                robot_vel=self.robot_vel,
+                robot_radius=self.robot_radius,
+                robot_vpref=float(getattr(self.robot, "vmax", 1.0)),
+            )
+        elif self.human_policy_name == 'potential_field':
+            nominal_actions = self.pf_helper.action_for_humans(
+                human_positions=self.human_positions,
+                human_vels=self.human_vels,
+                human_goals=self.human_goals,
+                human_radii=self.human_radii,
+                human_vprefs=self.human_vmaxs,
+                robot_pos=self.robot_pos,
+                robot_vel=self.robot_vel,
+                robot_radius=self.robot_radius,
+                robot_vpref=float(getattr(self.robot, "vmax", 1.0)),
+            )
+        else:
+            nominal_actions = np.zeros((self.num_humans, 2), dtype=np.float32)
+            for i, human in enumerate(self.humans):
+                nominal_actions[i] = human.nominal_controller(self.human_positions[i], self.human_goals[i])
+
+        exec_actions = HumanIntegrator.apply_gmm_batch(
+            humans=self.humans,
+            nominal_actions=nominal_actions,
+            states=self.human_positions,
+            goals=self.human_goals,
+            radii=self.human_radii,
+        )
+
+        # 3. human state update
+        for i, human in enumerate(self.humans):
+            human.step(exec_actions[i])
             self.human_positions[i] = human.get_pos()
             self.human_vels[i] = human.u
             self.human_trajs[i].append(self.human_positions[i].copy())
@@ -480,6 +516,7 @@ class SocialNav(gym.Env):
     def render(self):
         if self.render_mode is None:
             return
+        plt = self._get_plt()
 
         if not hasattr(self, 'fig') or self.fig is None:
             self.fig, self.ax = plt.subplots(figsize=(6, 6))
@@ -546,8 +583,14 @@ class SocialNav(gym.Env):
 
     def close(self):
         if hasattr(self, 'fig') and self.fig is not None:
+            plt = self._get_plt()
             plt.close(self.fig)
             self.fig = None
+
+    @staticmethod
+    def _get_plt():
+        import matplotlib.pyplot as plt
+        return plt
 
     def _update_obstacle_goals(self):
         """

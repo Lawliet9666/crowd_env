@@ -42,8 +42,8 @@ class Config:
         # self.human.vmax = 2.0
         # self.human.vmax_min = 0.8
         self.human.vmax = (0.5, 1.5)
-        self.human.arena_size = 6.0 # randomize human start/goal within [-arena_size, arena_size] *sqrt(2)
-        self.human.policy = "orca"  # 'nominal', 'orca', or 'social_force'
+        self.human.arena_size = 6.0
+        self.human.policy = "orca"  # 'nominal', 'orca', 'social_force', or 'potential_field'
         self.human.num_humans = 20
         self.human.human_num_range = 0
         self.human.randomize_attributes = True
@@ -60,17 +60,26 @@ class Config:
             "avoid_robot": False,
         }
         self.human.sf = {
-            "A": 1.0,
-            "B": 0.5,
-            "KI": 1.0,
+            "A": 8.0,
+            "B": 0.2,
+            "KI": 3.0,
             "avoid_robot": False,
-        } # for social force model
+        }
+        self.human.pf = {
+            "human_margin": 0.1,
+            "human_influence": 0.5,
+            "human_gain": 1.5,
+            "robot_margin": 0.15,
+            "robot_influence": 0.8,
+            "robot_gain": 2.0,
+            "avoid_robot": False,
+        }
 
         # Robot Parameters
         self.robot = BaseConfig()
         self.robot.radius = 0.3
         self.robot.vmax = 1.0
-        self.robot.amax = 2.0 # unused for now
+        self.robot.amax = 2.0
         self.robot.omega_max = np.pi / 2
         self.robot.type = "unicycle"  # 'single_integrator', 'unicycle', 'unicycle_dynamic'
 
@@ -88,8 +97,8 @@ class Config:
         self.reward.discomfort_penalty_factor = 10
 
         # self.reward.safe_shaping_weight = 0.0  # set >0 to enable smooth near-collision penalty
-        # self.reward.safe_shaping_weight = 0.3  # set >0 to enable smooth near-collision penalty
-        # self.reward.safe_shaping_band = 0.6    # active range: [discomfort_dist, discomfort_dist + band]
+        self.reward.safe_shaping_weight = 0.3  # set >0 to enable smooth near-collision penalty
+        self.reward.safe_shaping_band = 0.6    # active range: [discomfort_dist, discomfort_dist + band]
 
         if self.robot.type == 'unicycle':
             self.reward.potential_factor = 3.0  # increase potential reward for dynamic robot to encourage faster goal-reaching
@@ -100,7 +109,6 @@ class Config:
             self.reward.potential_factor = 2.0
             self.reward.back_factor = 0.0
             self.reward.spin_factor = 0.0
-
         self.reward.constant_penalty = -0.025
 
         # Deprecated: PPO hyperparameters are provided via CLI args (see config/arguments.py).

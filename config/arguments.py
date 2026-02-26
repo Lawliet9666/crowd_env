@@ -29,7 +29,7 @@ def get_args():
 
     # PPO Hyperparameters
 	parser.add_argument('--total_timesteps', type=int, default=20_000_000, help='Total timesteps of the training')
-	parser.add_argument('--n_updates_per_iteration', type=int, default=3)
+	parser.add_argument('--n_updates_per_iteration', type=int, default=8, help='Number of epochs to update the policy per iteration')
 	parser.add_argument('--timesteps_per_batch', type=int, default=4096)
 	parser.add_argument('--gamma', type=float, default=0.99)
 	parser.add_argument('--lr', type=float, default=1e-4)
@@ -41,7 +41,7 @@ def get_args():
 	parser.add_argument('--target_kl', type=float, default=0.02, help='KL Divergence threshold')
 	parser.add_argument('--max_grad_norm', type=float, default=0.5)
 	parser.add_argument('--action_std_init', type=float, default=0.5, help='Initial action std')
-	parser.add_argument('--disable_ema', action='store_true', default=False, help='Disable EMA actor for eval/checkpoint')
+	parser.add_argument('--disable_ema', action='store_true', default=True, help='Disable EMA actor for eval/checkpoint')
 	parser.add_argument('--ema_decay', type=float, default=0.995, help='EMA decay for actor parameters')
 
 	parser.add_argument('--eval_freq_episodes', type=int, default=20, help='Frequency of evaluation in episodes')
