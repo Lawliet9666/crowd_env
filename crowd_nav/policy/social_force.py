@@ -9,6 +9,10 @@ class SOCIAL_FORCE(Policy):
         self.KI = self.config.sf.KI
         self.A = self.config.sf.A
         self.B = self.config.sf.B
+        self.rng = np.random.default_rng(0)
+
+    def set_seed(self, seed):
+        self.rng = np.random.default_rng(int(seed))
 
     def predict(self, state):
         return self.predict_from_states(state.self_state, state.human_states)
@@ -47,7 +51,7 @@ class SOCIAL_FORCE(Policy):
             else:
                 # If agents are exactly overlapping, apply a random repulsive force to separate them
                 force_magnitude = self.A * np.exp((self_state.radius + other_human_state.radius) / B)
-                angle = np.random.uniform(-np.pi, np.pi)
+                angle = self.rng.uniform(-np.pi, np.pi)
                 interaction_vx += force_magnitude * np.cos(angle)
                 interaction_vy += force_magnitude * np.sin(angle)
 

@@ -178,6 +178,24 @@ class SingleIntegrator(RobotModel):
 
         return out.astype(np.float32, copy=False)
 
+    @staticmethod
+    def step_batch(actions, vmaxs, positions, dt):
+        """
+        Vectorized single-integrator update for all humans.
+        Mirrors per-human step semantics:
+        - clip speed to vmax
+        - Euler integrate position with dt
+        """
+        u = np.asarray(actions, dtype=np.float32).reshape(-1, 2)
+        vmax = np.asarray(vmaxs, dtype=np.float32).reshape(-1, 1)
+        pos = np.asarray(positions, dtype=np.float32).reshape(-1, 2)
+
+        speed = np.linalg.norm(u, axis=1, keepdims=True)
+        u = u * np.minimum(1.0, vmax / np.maximum(speed, 1e-8))
+        pos_next = pos + u * float(dt)
+
+        return u.astype(np.float32, copy=False), pos_next.astype(np.float32, copy=False)
+
     def apply_gmm(self, action, state=None, goal=None):
         """
         Apply GMM perturbation to a nominal action after it is generated.

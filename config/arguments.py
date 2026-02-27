@@ -61,7 +61,7 @@ def get_args():
 	parser.add_argument('--ppo_clip', type=float, default=0.2)
 	parser.add_argument('--ppo_lam', type=float, default=0.98)
 	parser.add_argument('--ppo_num_minibatches', type=int, default=8)
-	parser.add_argument('--ppo_ent_coef', type=float, default=0.0)
+	parser.add_argument('--ppo_ent_coef', type=float, default=0.01)
 	parser.add_argument('--ppo_target_kl', type=float, default=0.02)
 	parser.add_argument('--ppo_max_grad_norm', type=float, default=0.5, help='Gradient clipping norm for PPO')
 	parser.add_argument('--ppo_action_std_init', type=float, default=0.5)

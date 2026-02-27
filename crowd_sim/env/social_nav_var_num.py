@@ -120,6 +120,7 @@ class SocialNavVarNum(SocialNav):
         self.human_vels = np.zeros((self.num_humans, 2), dtype=float)
         self.human_goals = np.zeros((self.num_humans, 2), dtype=float)
         self.human_trajs = [[] for _ in range(self.num_humans)]
+        self.human_traj_steps = []
 
     def _sample_human_count(self):
         if self.human_num_range <= 0:
@@ -146,6 +147,14 @@ class SocialNavVarNum(SocialNav):
         if v_pref <= 1e-8:
             return np.asarray(self.human_goals[idx], dtype=float).copy()
         noise_scale = 1.0 if v_pref <= 1e-8 else v_pref
+        self_r = float(self.human_radii[idx])
+
+        other_mask = np.ones((self.num_humans,), dtype=bool)
+        other_mask[idx] = False
+        other_positions = self.human_positions[other_mask]
+        other_goals = self.human_goals[other_mask]
+        other_radii = self.human_radii[other_mask]
+        safe_dists = self_r + other_radii + float(self.discomfort_dist)
 
         for _ in range(100):
             angle = float(self.np_random.random() * np.pi * 2.0)
@@ -156,21 +165,17 @@ class SocialNavVarNum(SocialNav):
             candidate = np.array([gx, gy], dtype=float)
 
             collide = False
-            min_dist_robot = self.human_radii[idx] + self.robot_radius + self.discomfort_dist
+            min_dist_robot = self_r + self.robot_radius + self.discomfort_dist
             if np.linalg.norm(candidate - self.robot_pos) < min_dist_robot or \
                np.linalg.norm(candidate - self.goal_pos) < min_dist_robot:
                 collide = True
             if collide:
                 continue
 
-            for j in range(self.num_humans):
-                if j == idx:
-                    continue
-                safe_dist_init = self.human_radii[idx] + self.human_radii[j] + self.discomfort_dist
-                if np.linalg.norm(candidate - self.human_positions[j]) < safe_dist_init or \
-                   np.linalg.norm(candidate - self.human_goals[j]) < safe_dist_init:
-                    collide = True
-                    break
+            if other_positions.shape[0] > 0:
+                dist_to_positions = np.linalg.norm(other_positions - candidate, axis=1)
+                dist_to_goals = np.linalg.norm(other_goals - candidate, axis=1)
+                collide = bool(np.any((dist_to_positions < safe_dists) | (dist_to_goals < safe_dists)))
 
             if not collide:
                 return candidate
