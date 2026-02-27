@@ -3,7 +3,6 @@ from gymnasium import spaces
 import numpy as np
 from crowd_sim.env.robot.robot import SingleIntegrator, Unicycle, UnicycleDynamic
 from crowd_sim.env.robot.obstacle import SingleIntegrator as HumanIntegrator
-from crowd_nav.policy.orca_helper import ORCAHelper
 from crowd_nav.policy.social_force_helper import SocialForceHelper
 from crowd_nav.policy.potential_field_helper import PotentialFieldHelper
 from crowd_sim.utils import sample_point_in_disk
@@ -88,6 +87,13 @@ class SocialNav(gym.Env):
         self.sf_helper = None
         self.pf_helper = None
         if self.human_policy_name == 'orca':
+            try:
+                from crowd_nav.policy.orca_helper import ORCAHelper
+            except ModuleNotFoundError as exc:
+                raise ModuleNotFoundError(
+                    "ORCA policy requested but optional dependency is missing. "
+                    "Install Python-RVO2 (rvo2) to use human.policy='orca'."
+                ) from exc
             self.orca_helper = ORCAHelper(
                 dt=self.dt,
                 orca_params=self.orca_params,

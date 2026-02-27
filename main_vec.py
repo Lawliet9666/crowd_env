@@ -12,11 +12,12 @@ import numpy as np
 import torch
 import wandb
 from gymnasium.vector import AsyncVectorEnv
+from crowd_nav.policy_utils import get_policy_class
 
 from config.arguments import get_args
 from config.config import Config
 from crowd_sim.utils import build_env, dump_test_config, dump_train_config
-from eval_policy_v2 import RLEvalActorAdapter, eval_policy, run_crossing_scenario
+from eval_policy import RLEvalActorAdapter, eval_policy
 from rl.network import FCNet
 from rl.vec_ppo import VecPPO
 from rl.vec_sac import VecSAC
@@ -149,12 +150,13 @@ def build_ppo_hyperparameters(args, base_hyperparameters, config):
     return hyperparameters
 
 
-def train(env, num_envs, algo, hyperparameters, actor_model, critic_model, total_timesteps):
+def train(env, num_envs, algo, hyperparameters, actor_model, critic_model, total_timesteps, method):
     print(f"Training with {num_envs} vectorized environments", flush=True)
     print(f"Algorithm: {algo.upper()}, Policy: FCNet", flush=True)
+    PolicyClass = get_policy_class(method)
 
     model_cls = ALGO_TO_MODEL[algo]
-    model = model_cls(policy_class=FCNet, env=env, num_envs=num_envs, **hyperparameters)
+    model = model_cls(policy_class=PolicyClass, env=env, num_envs=num_envs, **hyperparameters)
 
     loaded_parts = []
     if actor_model != "":
@@ -197,7 +199,14 @@ def test(env, actor_model, device, method, hyperparameters, algo):
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
 
-    policy = FCNet(obs_dim, act_dim).to(device)
+	# Select Policy Class based on method
+    PolicyClass = get_policy_class(method)
+    relevant_keys = ['robot_type', 'safe_dist', 'alpha', 'beta', 'vmax', 'amax', 'omega_max', 'slack_weight']
+    policy_kwargs = {k: hyperparameters[k] for k in relevant_keys if k in hyperparameters}		
+    print(f"Policy Args: {policy_kwargs}")
+
+    policy = PolicyClass(obs_dim, act_dim, **policy_kwargs).to(device)
+
     policy.load_state_dict(torch.load(actor_model, map_location=device))
     policy.eval()
 
@@ -214,7 +223,7 @@ def test(env, actor_model, device, method, hyperparameters, algo):
         method=method,
         visualize_episodes=hyperparameters["test_viz_ep"],
     )
-    run_crossing_scenario(actor, env, save_path=save_path)
+    # run_crossing_scenario(actor, env, save_path=save_path)
 
 
 def main(args):
@@ -295,6 +304,7 @@ def main(args):
                 actor_model=args.actor_model,
                 critic_model=args.critic_model,
                 total_timesteps=args.total_timesteps,
+                method=args.method,
             )
         finally:
             vec_env.close()

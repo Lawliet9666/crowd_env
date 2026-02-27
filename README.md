@@ -1,9 +1,40 @@
 # Crowd Navigation Test Environment
 
-## Install
+## Install (Modular)
+
+If running on vail:
 
 ```bash
 micromamba activate irsim39
+```
+
+Verified on Python `3.10` to `3.12`. Or create a fresh one:
+
+```bash
+micromamba create -n env-name python=3.11 -y
+micromamba activate env-name
+```
+
+### 1) Install PyTorch (required)
+- [PyTorch Get Started](https://pytorch.org/get-started/locally/)
+
+### 2) Core dependencies (required)
+
+```bash
+pip install numpy gymnasium wandb imageio matplotlib cvxopt
+```
+
+### 3) ORCA / RVO2 (conditional)
+
+If human policy is `orca`, install `rvo2` from:
+- [Python-RVO2](https://github.com/sybrenstuvel/Python-RVO2)
+
+### 4) Optional modules
+
+QP / CVaR network experiments (only needed for qpth-based models):
+
+```bash
+pip install scipy qpth
 ```
 
 ## Quick Environment Test
@@ -13,13 +44,8 @@ Run a simple rollout and save a GIF:
 ```bash
 # Variable-number crowd (default)
 python test_env.py --env_name social_nav_var_num --steps 200 --obs_num 20
-
-# Fixed crowd
-python test_env.py --env_name social_nav --steps 200 --obs_num 10
-
-# Custom seed and output path
-python test_env.py --seed 42 --save_path trained_models/test.gif
 ```
+
 
 ### `test_env.py` Arguments
 
@@ -30,6 +56,35 @@ python test_env.py --seed 42 --save_path trained_models/test.gif
 | `--steps` | `200` | Max steps per episode |
 | `--save_path` | `trained_models/<env>.gif` | Output GIF path |
 | `--human_num` | `20` | Number of pedestrians |
+
+## Observation Format
+
+Observation is a 1D vector with shape:
+
+```text
+obs_dim = 6 + 6 * K
+K = config.env["max_obstacles_obs"]
+```
+
+Robot block (`obs[0:6]`):
+
+```text
+[goal_rel_x, goal_rel_y, vx, vy, theta, robot_radius]
+```
+
+Obstacle blocks (`K` slots, each 6 dims):
+
+```text
+[rel_x, rel_y, human_vx, human_vy, human_radius, mask]
+```
+
+Details:
+- `rel_*` is defined as `robot_pos - human_pos`.
+- Only visible humans (`distance <= sensing_radius`) are considered.
+- The nearest `K` visible humans are packed into slots.
+- Unused slots are zero-padded, and `mask=0`.
+- Valid slots have `mask=1`.
+
 
 ## Training and Evaluation
 
@@ -90,13 +145,53 @@ python main_vec.py --mode test --algo ppo --method rl --actor_model trained_mode
 
 Note: `main_vec.py` currently enforces `--method rl`.
 
+
+
+## Evaluation
+
+### A) Visual eval for one checkpoint (`main_vec.py`，`main.py`)
+
+Use this when you want to directly inspect trajectory behavior and GIFs for a specific actor checkpoint.
+default algo is sac
+```bash
+python main_vec.py \
+  --mode test \
+  --method rl \
+  --algo ppo \
+  --actor_model trained_models/default/20260227_111328_unicycle_rl_ppo/ppo_actor_step_500000.pth \
+  --test_ep 100 \
+  --test_viz_ep 50 \
+  --eval_seed 100
+```
+
+- Output folder: `<checkpoint_dir>/<timestamp>/` (contains GIFs and `eval_log.json`).
+- Render behavior is controlled by `render_mode` when creating test env.
+- Default is `rgb_array` (save GIFs).
+- Add `--render` to use `human` mode (show window directly):
+
+
+### B) Batch eval for all actor checkpoints (`eval.py`)
+
+Use this when you want robust model selection across many checkpoints and seeds.
+
+```bash
+python eval.py \
+  --actor_model 20260227_111328_unicycle_rl_ppo \
+  --eval_seeds 100,200,300,400,500,600,700,800,900,1000 \
+  --episodes_per_seed 50
+```
+
+- Automatically evaluates all `*actor*.pth` in the run directory.
+- Outputs one summary JSON in run dir (default: `checkpoint_eval_all_multiseed.json`).
+
+
 ## Arguments (Current)
 
 ### Common Runtime Arguments
 
 - `--mode` (`train` or `test`)
 - `--algo` (`sac` or `ppo`)
-- `--method`
+- `--method` (`rl`)
 - `--actor_model`, `--critic_model`
 
 ### Common Training / System Arguments
@@ -172,7 +267,16 @@ All environment/controller defaults are in `config/config.py`:
 
 ## Robot Types
 
-| Type | Action Space | Description |
-|---|---|---|
-| `single_integrator` | `[vx, vy]` | Velocity-controlled |
-| `unicycle` | `[v, ω]` | Heading + speed controlled |
+Robot-related config is under `config.robot` in `config/config.py`:
+- `type`
+- `radius`
+- `vmax`
+- `omega_max`
+
+| Type (`config.robot.type`) | Action Space | Uses From `config.robot` | Notes |
+|---|---|---|---|
+| `single_integrator` | `[vx, vy]` | `radius`, `vmax` | Action norm is clipped to `vmax`. `omega_max` / `amax` are not used. |
+| `unicycle` | `[v, omega]` | `radius`, `vmax`, `omega_max` | `v` clipped to `[-vmax, vmax]`, `omega` clipped to `[-omega_max, omega_max]`. |
+
+Extra note for RL with unicycle:
+- If `config.env.rl_xy_to_unicycle=True`, policy outputs `[vx, vy]` and env converts it to `[v, omega]` internally.

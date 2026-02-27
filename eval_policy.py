@@ -12,7 +12,7 @@ import torch
 
 
 class RLEvalActorAdapter:
-    """Deterministic RL action mapping with tanh-squash to action bounds."""
+    """Deterministic RL action mapping consistent with PPO tanh-squash."""
 
     def __init__(self, actor, action_space, device):
         self.actor = actor
@@ -254,8 +254,7 @@ def _record_executed_action(metrics, env, fallback_action):
 def rollout(actor, env, base_seed=0, track_signals=False, unom_holder=None):
     ep_cnt = 0
     while True:
-        seed = None if base_seed is None else int(base_seed) + ep_cnt
-        obs, _ = env.reset(seed=seed)
+        obs, _ = env.reset(seed=base_seed + ep_cnt)
         ep_cnt += 1
 
         done = False

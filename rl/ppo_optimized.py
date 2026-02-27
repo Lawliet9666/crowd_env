@@ -76,7 +76,7 @@ class PPO:
         # if issubclass(policy_class, DeepSetsPolicy):
         #     self.critic = DeepSetsValueNet(self.obs_dim, 1).to(self.device)
         # else:
-        self.critic = FCNet(self.obs_dim, 1).to(self.device)
+        self.critic = FCNet(self.obs_dim, 1, **actor_kwargs).to(self.device)
 
         # Learnable log std for action distribution (keeps QP differentiable)
         init_std = self.action_std_init
