@@ -1,6 +1,5 @@
 """
-	This file is the executable for running PPO. It is based on this medium article: 
-	https://medium.com/@eyyu/coding-ppo-from-scratch-with-pytorch-part-1-4-613dfc1b14c8
+	Entry point for training/testing SAC in crowd navigation environments.
 """
 
 import sys
@@ -15,7 +14,7 @@ from config.arguments import get_args
 from config.config import Config
 from rl.sac import SAC
 from rl.network import FCNet 
-from eval_policy_v2 import RLEvalActorAdapter, eval_policy, run_crossing_scenario
+from eval_policy_v2 import RLEvalActorAdapter, eval_policy
 from crowd_sim.utils import build_env
 
 def set_global_seeds(seed):
@@ -54,7 +53,7 @@ def train(env, hyperparameters, actor_model, critic_model, total_timesteps):
 	else:
 		print(f"Training from scratch.", flush=True)
 
-	# Train the PPO model with a specified total timesteps
+	# Train SAC with a specified total timesteps
 	model.learn(total_timesteps=total_timesteps)
 	
 
@@ -70,10 +69,10 @@ def test(env, actor_model, device, test_episodes=50):
 	obs_dim = env.observation_space.shape[0]
 	act_dim = env.action_space.shape[0]
 
-	# Build our policy the same way we build our actor model in PPO
+	# Build our policy the same way we build our actor model in training
 	policy = FCNet(obs_dim, act_dim).to(device)
 
-	# Load in the actor model saved by the PPO algorithm
+	# Load in the actor model saved by SAC
 	policy.load_state_dict(torch.load(actor_model, map_location=device))
 
 	save_path = os.path.dirname(actor_model)
@@ -81,9 +80,9 @@ def test(env, actor_model, device, test_episodes=50):
 	# Wrap raw network with deterministic action adapter expected by eval_policy_v2.
 	policy = RLEvalActorAdapter(policy, env.action_space, device)
 
-	# Evaluate our policy with a separate module, eval_policy, to demonstrate
-	# that once we are done training the model/policy with ppo.py, we no longer need
-	# ppo.py since it only contains the training algorithm. The model/policy itself exists
+	# Evaluate policy with a separate module to demonstrate
+	# that once we are done training, we no longer need sac.py since it only contains
+	# the training algorithm. The model/policy itself exists
 	# independently as a binary file that can be loaded in with torch.
 
 	eval_policy(policy=policy, env=env, max_episodes=test_episodes, save_path=save_path)
@@ -95,10 +94,6 @@ def main(args):
 	config = Config() # input the config path if needed
 	env_name = config.env.get('name', 'social_nav_var_num')
 
-	# NOTE: Here's where you can set hyperparameters for SAC. I don't include them as part of
-	# ArgumentParser because it's too annoying to type them every time at command line. Instead, you can change them here.
-	# To see a list of hyperparameters, look in sac.py at function _init_hyperparameters
-	
 	# Create directory for saving models
 	# Structure: trained_models/{model_folder}/{timestamp}_{exp_name}/
 	now = datetime.now()
@@ -122,23 +117,28 @@ def main(args):
 		device = torch.device('cpu')
 		print("Using CPU.", flush=True)
 
+	max_ep_steps = config.env.max_steps if args.max_timesteps_per_episode is None else args.max_timesteps_per_episode
+
 	hyperparameters = {
-		# RL Hyperparameters
-		'n_updates_per_iteration': args.n_updates_per_iteration,
+		# SAC Hyperparameters
 		'timesteps_per_batch': args.timesteps_per_batch,
-		'max_timesteps_per_episode': config.env.max_steps,
-		'clip': args.clip,
-		'lr': args.lr,
+		'max_timesteps_per_episode': max_ep_steps,
+		'buffer_size': args.buffer_size,
+		'batch_size': args.batch_size,
+		'start_timesteps': args.start_timesteps,
+		'updates_per_step': args.updates_per_step,
+		'hidden_sizes': tuple(args.hidden_sizes),
 		'gamma': args.gamma,
-		'lam': args.lam,
-		'ent_coef': args.ent_coef,
-		'target_kl': args.target_kl,
+		'tau': args.tau,
+		'actor_lr': args.actor_lr,
+		'critic_lr': args.critic_lr,
 		'max_grad_norm': args.max_grad_norm,
+		'auto_alpha': args.auto_alpha,
+		'alpha': args.alpha,
+		'alpha_lr': args.alpha_lr,
+		'target_entropy': args.target_entropy,
 		'action_std_init': args.action_std_init,
-		'use_ema': not args.disable_ema,
-		'ema_decay': args.ema_decay,
 		# Other parameters
-		'eval_freq_episodes': args.eval_freq_episodes,
 		'test_ep': args.test_ep,
 		'test_viz_ep': args.test_viz_ep,
 		'env_name': env_name,
@@ -150,7 +150,6 @@ def main(args):
 		'eval_seed': args.seed if args.eval_seed is None else args.eval_seed,
 		'save_dir': save_dir,
 		'device': device,
-		'debug': args.debug,
 		# Environment Parameters
 		'safe_dist': config.controller_params['safety_margin'] + config.human_params['radius'] + config.robot_params['radius'],
 		'cbf_alpha': config.controller_params['cbf_alpha'],

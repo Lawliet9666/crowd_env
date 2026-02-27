@@ -538,27 +538,27 @@ class SAC:
         return np.nan
 
     def _init_hyperparameters(self, hyperparameters):
-        self.timesteps_per_batch = 4096
+        self.timesteps_per_batch = 2_000
         self.max_timesteps_per_episode = 200
         self.n_updates_per_iteration = 8
         self.batch_size = 256
-        self.buffer_size = 1_000_000
-        self.start_timesteps = 2_000
-        self.updates_per_step = None
+        self.buffer_size = 500_000
+        self.start_timesteps = 15_000
+        self.updates_per_step = 1
 
         self.gamma = 0.99
         self.tau = 0.005
         self.lr = 3e-4
-        self.actor_lr = None
-        self.critic_lr = None
+        self.actor_lr = 3e-4
+        self.critic_lr = 5e-4
         self.hidden_sizes = (256, 256)
-        self.max_grad_norm = 0.5
+        self.max_grad_norm = 1.0
 
-        self.alpha = 0.2
-        self.auto_alpha = False
+        self.alpha = 0.10
+        self.auto_alpha = True
         self.alpha_lr = 3e-4
-        self.target_entropy = None
-        self.action_std_init = 0.5
+        self.target_entropy = -1.2
+        self.action_std_init = 0.20
 
         self.render = False
         self.render_every_i = 50
@@ -576,6 +576,7 @@ class SAC:
         self.vmax = 1.0
         self.amax = 1.0
         self.omega_max = 1.0
+        self.env_name = ""
 
         for param, val in hyperparameters.items():
             if param == "device":
@@ -583,12 +584,9 @@ class SAC:
             else:
                 setattr(self, param, val)
 
-        # Backward compatibility with existing PPO-style arguments from main.py
-        if "ent_coef" in hyperparameters and "alpha" not in hyperparameters:
-            self.alpha = float(hyperparameters["ent_coef"])
-        if "actor_lr" not in hyperparameters or self.actor_lr is None:
+        if self.actor_lr is None:
             self.actor_lr = float(self.lr)
-        if "critic_lr" not in hyperparameters or self.critic_lr is None:
+        if self.critic_lr is None:
             self.critic_lr = float(self.lr)
         if isinstance(self.hidden_sizes, list):
             self.hidden_sizes = tuple(self.hidden_sizes)
