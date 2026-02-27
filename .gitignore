@@ -24,7 +24,7 @@ trained_models/*.gif
 trained_models/*.pt
 trained_models/*.pth
 trained_models/*.pkl
-
+/trained_models
 # IDE
 .vscode/
 .idea/
@@ -34,3 +34,5 @@ trained_models/*.pkl
 
 # Logs
 *.log
+
+/wandb/
