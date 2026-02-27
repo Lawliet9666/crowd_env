@@ -99,8 +99,6 @@ def build_ppo_hyperparameters(args, base_hyperparameters, config):
             "target_kl": args.ppo_target_kl,
             "max_grad_norm": args.ppo_max_grad_norm,
             "action_std_init": args.ppo_action_std_init,
-            "use_ema": args.ppo_use_ema,
-            "ema_decay": args.ppo_ema_decay,
             "eval_freq_episodes": args.ppo_eval_freq_episodes,
             "eval_episodes": args.ppo_eval_episodes,
             "alpha": config.controller_params["cbf_alpha"],
@@ -122,8 +120,6 @@ def train(env, algo, hyperparameters, actor_model, critic_model, total_timesteps
             print(f"Actor checkpoint not found: {actor_model}", flush=True)
             sys.exit(0)
         model.actor.load_state_dict(torch.load(actor_model, map_location=hyperparameters["device"]))
-        if hasattr(model, "_reset_ema_from_actor"):
-            model._reset_ema_from_actor()
         loaded_parts.append(f"actor={actor_model}")
 
     if critic_model != "":

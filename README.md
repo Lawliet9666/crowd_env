@@ -138,7 +138,6 @@ Note: `main_vec.py` currently enforces `--method rl`.
 - `--ppo_target_kl`
 - `--ppo_max_grad_norm`
 - `--ppo_action_std_init`
-- `--ppo_use_ema`, `--ppo_ema_decay`
 - `--ppo_eval_freq_episodes`, `--ppo_eval_episodes`
 
 Evaluation in training can be disabled by setting frequency to `0`:

@@ -65,8 +65,6 @@ def get_args():
 	parser.add_argument('--ppo_target_kl', type=float, default=0.02)
 	parser.add_argument('--ppo_max_grad_norm', type=float, default=0.5, help='Gradient clipping norm for PPO')
 	parser.add_argument('--ppo_action_std_init', type=float, default=0.5)
-	parser.add_argument('--ppo_use_ema', dest='ppo_use_ema', action='store_true', default=False)
-	parser.add_argument('--ppo_ema_decay', type=float, default=0.995)
 	parser.add_argument('--ppo_eval_freq_episodes', type=int, default=50, help='Run PPO evaluation every N completed training episodes (0 disables)')
 	parser.add_argument('--ppo_eval_episodes', type=int, default=20, help='Number of episodes per PPO evaluation run')
 

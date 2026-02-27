@@ -6,7 +6,6 @@
 
 import os
 import time
-import copy
 import wandb
 import gymnasium as gym
 import imageio
@@ -74,9 +73,6 @@ class PPO:
         actor_kwargs.update(getattr(self, "policy_kwargs", {}))
 
         self.actor = policy_class(self.obs_dim, self.act_dim, **actor_kwargs).to(self.device)
-        self.actor_ema = copy.deepcopy(self.actor).eval()
-        for p in self.actor_ema.parameters():
-            p.requires_grad_(False)
         # if issubclass(policy_class, DeepSetsPolicy):
         #     self.critic = DeepSetsValueNet(self.obs_dim, 1).to(self.device)
         # else:
@@ -125,8 +121,6 @@ class PPO:
         """
         print(f"Learning... Running {self.max_timesteps_per_episode} timesteps per episode, ", end='')
         print(f"{self.timesteps_per_batch} timesteps per batch for a total of {total_timesteps} timesteps")
-        if self.use_ema:
-            self._reset_ema_from_actor()
         next_timestep_save = self._next_save_step()
         t_so_far = 0 # Timesteps simulated so far
         i_so_far = 0 # Iterations ran so far
@@ -313,8 +307,6 @@ class PPO:
                     # Gradient Clipping with given threshold
                     nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
                     self.actor_optim.step()
-                    if self.use_ema:
-                        self._update_actor_ema()
 
                     # Calculate gradients and perform backward propagation for critic network
                     self.critic_optim.zero_grad()
@@ -368,8 +360,7 @@ class PPO:
                     obs_tensor = torch.tensor(obs, dtype=torch.float).to(self.device).unsqueeze(0) # Add batch dim
                     # Use mean action directly (deterministic)
                     if hasattr(self, 'actor'):
-                        eval_actor = self.actor_ema if self.use_ema else self.actor
-                        action_tensor, _ = self._squash_action(eval_actor(obs_tensor))
+                        action_tensor, _ = self._squash_action(self.actor(obs_tensor))
                         action = action_tensor.detach().cpu().numpy()[0] # Remove batch dim
                     else:
                         raise ValueError("Actor model not found during evaluation")
@@ -420,12 +411,8 @@ class PPO:
 
         if success_rate > self.best_success_rate:
             self.best_success_rate = float(success_rate)
-            actor_to_save = self.actor_ema if self.use_ema else self.actor
             best_path = os.path.join(self.save_dir, "ppo_actor_best.pth")
-            torch.save(actor_to_save.state_dict(), best_path)
-            if self.use_ema:
-                best_ema_path = os.path.join(self.save_dir, "ppo_actor_ema_best.pth")
-                torch.save(self.actor_ema.state_dict(), best_ema_path)
+            torch.save(self.actor.state_dict(), best_path)
             print(
                 f"Saved best actor at step {step} (success={success_rate:.3f})",
                 flush=True,
@@ -659,9 +646,6 @@ class PPO:
         actor_path = os.path.join(self.save_dir, f"ppo_actor{name_suffix}.pth")
         critic_path = os.path.join(self.save_dir, f"ppo_critic{name_suffix}.pth")
         torch.save(self.actor.state_dict(), actor_path)
-        if self.use_ema:
-            actor_ema_path = os.path.join(self.save_dir, f"ppo_actor_ema{name_suffix}.pth")
-            torch.save(self.actor_ema.state_dict(), actor_ema_path)
         torch.save(self.critic.state_dict(), critic_path)
 
     def _next_save_step(self):
@@ -671,20 +655,6 @@ class PPO:
             return int(self.save_freq)
         k = max(1, (int(self.save_after_timesteps) + int(self.save_freq) - 1) // int(self.save_freq))
         return k * int(self.save_freq)
-
-    def _reset_ema_from_actor(self):
-        if not self.use_ema:
-            return
-        with torch.no_grad():
-            for p_ema, p in zip(self.actor_ema.parameters(), self.actor.parameters()):
-                p_ema.copy_(p.data)
-
-    def _update_actor_ema(self):
-        if not self.use_ema:
-            return
-        with torch.no_grad():
-            for p_ema, p in zip(self.actor_ema.parameters(), self.actor.parameters()):
-                p_ema.mul_(self.ema_decay).add_(p.data, alpha=1.0 - self.ema_decay)
 
     def _init_hyperparameters(self, hyperparameters):
         # Initialize default values for hyperparameters
@@ -702,8 +672,6 @@ class PPO:
         self.target_kl = 0.02                           # KL Divergence threshold
         self.max_grad_norm = 0.5                        # Gradient Clipping threshold
         self.action_std_init = 0.5                       # Initial action std (learnable)
-        self.use_ema = True                              # Whether to keep EMA copy of actor for eval/checkpoints
-        self.ema_decay = 0.995                           # EMA decay for actor parameters
         self.save_after_timesteps = 0                    # First timestep to save checkpoint (0 means disabled)
         self.save_freq = 0                  # Checkpoint interval in timesteps (0 means disabled)
         self.eval_freq_episodes = 0                      # Eval disabled by default unless explicitly configured
