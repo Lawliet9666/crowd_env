@@ -43,7 +43,7 @@ class Config:
         self.human.vmax = (0.5, 1.5)
         self.human.arena_size = 6.0
         self.human.policy = "social_force"  # 'nominal', 'orca', 'social_force', or 'potential_field'
-        self.human.num_humans = 1
+        self.human.num_humans = 20
         self.human.human_num_range = 0
         self.human.randomize_attributes = True
         # Whether to apply GMM perturbation to human actions in env.step.

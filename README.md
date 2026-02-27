@@ -90,20 +90,29 @@ python main_vec.py --mode test --algo ppo --method rl --actor_model trained_mode
 
 Note: `main_vec.py` currently enforces `--method rl`.
 
-## Hyperparameters: SAC vs PPO
+## Arguments (Current)
 
-### Shared/Common Arguments
+### Common Runtime Arguments
+
+- `--mode` (`train` or `test`)
+- `--algo` (`sac` or `ppo`)
+- `--method`
+- `--actor_model`, `--critic_model`
+
+### Common Training / System Arguments
 
 - `--total_timesteps`
 - `--timesteps_per_batch`
 - `--max_timesteps_per_episode`
 - `--gamma`
-- `--max_grad_norm`
+- `--test_ep`, `--test_viz_ep`
+- `--render`, `--render_every_i`
+- `--save_after_timesteps`, `--save_freq`
+- `--model_folder`
+- `--device`
 - `--seed`, `--eval_seed`
-- `--device` (`cuda` or `cpu`)
-- `--save_after_timesteps`, `--save_freq`, `--model_folder`
 
-### SAC-Oriented Arguments
+### SAC-Specific Arguments
 
 - `--buffer_size`
 - `--batch_size`
@@ -112,11 +121,13 @@ Note: `main_vec.py` currently enforces `--method rl`.
 - `--hidden_sizes`
 - `--tau`
 - `--actor_lr`, `--critic_lr`
-- `--auto_alpha`, `--no_auto_alpha`
+- `--sac_max_grad_norm`
+- `--sac_eval_freq_episodes`, `--sac_eval_episodes`
+- `--no_auto_alpha` (default is auto-alpha enabled; pass this flag to disable)
 - `--alpha`, `--alpha_lr`, `--target_entropy`
 - `--action_std_init`
 
-### PPO-Oriented Arguments
+### PPO-Specific Arguments
 
 - `--ppo_n_updates_per_iteration`
 - `--ppo_lr`
@@ -125,10 +136,14 @@ Note: `main_vec.py` currently enforces `--method rl`.
 - `--ppo_num_minibatches`
 - `--ppo_ent_coef`
 - `--ppo_target_kl`
+- `--ppo_max_grad_norm`
 - `--ppo_action_std_init`
-- `--ppo_use_ema`
-- `--ppo_ema_decay`
-- `--ppo_eval_freq_episodes`
+- `--ppo_use_ema`, `--ppo_ema_decay`
+- `--ppo_eval_freq_episodes`, `--ppo_eval_episodes`
+
+Evaluation in training can be disabled by setting frequency to `0`:
+- SAC: `--sac_eval_freq_episodes 0`
+- PPO: `--ppo_eval_freq_episodes 0`
 
 ## Checkpoints and Output Folder
 
