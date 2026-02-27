@@ -24,8 +24,8 @@ class Config:
         self.env = BaseConfig()
         self.env.name = "social_nav_var_num"
         self.env.dt = 0.1
-        self.env.max_steps = 400
-        self.env.sensing_radius = 5.0
+        self.env.max_steps = 200
+        self.env.sensing_radius = 20.0
         self.env.max_obstacles_obs = 1
         # For pure RL + unicycle only:
         # when enabled, policy outputs [vx, vy], env.step converts to [v, omega].
@@ -43,8 +43,8 @@ class Config:
         # self.human.vmax_min = 0.8
         self.human.vmax = (0.5, 1.5)
         self.human.arena_size = 6.0
-        self.human.policy = "orca"  # 'nominal', 'orca', 'social_force', or 'potential_field'
-        self.human.num_humans = 20
+        self.human.policy = "nominal"  # 'nominal', 'orca', 'social_force', or 'potential_field'
+        self.human.num_humans = 1
         self.human.human_num_range = 0
         self.human.randomize_attributes = True
         # Human goal changing behavior

@@ -30,7 +30,7 @@ class SocialNavVarNum(SocialNav):
                 py = self.arena_size * np.sin(angle)
                 while True:
                     gx, gy = rng.uniform(-self.arena_size, self.arena_size, 2)
-                    if np.linalg.norm([px - gx, py - gy]) >= 4: # TODO: previous 4
+                    if np.linalg.norm([px - gx, py - gy]) >= 6: # TODO: previous 4
                         break
                 theta = rng.uniform(0, 2 * np.pi)
             else:
