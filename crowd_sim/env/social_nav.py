@@ -22,6 +22,7 @@ class SocialNav(gym.Env):
         self.max_steps = env_params['max_steps']
         self.sensing_radius = float(env_params.get('sensing_radius', 5.0))
         self.max_obstacles_obs = int(env_params.get('max_obstacles_obs', 10))
+        self.normalize_obs = bool(env_params.get('normalize_obs', False))
         self.rl_xy_to_unicycle = bool(env_params.get('rl_xy_to_unicycle', False))
         self.unicycle_k_omega = float(env_params.get('unicycle_k_omega', 2.0))
 
@@ -59,6 +60,7 @@ class SocialNav(gym.Env):
         self.human_vels = np.zeros((self.num_humans, 2), dtype=float)
         self.human_goals = np.zeros((self.num_humans, 2), dtype=float)
         self.human_trajs = [[] for _ in range(self.num_humans)]
+        self.human_traj_steps = []
         self.human_vmaxs = np.zeros(self.num_humans, dtype=float) 
 
         self.human_vmax_min, self.human_vmax = map(float, human_params["vmax"])
@@ -156,6 +158,7 @@ class SocialNav(gym.Env):
         # 2. Initialize Trajectory Storage
         self.robot_traj = []
         self.human_trajs = [[] for _ in range(self.num_humans)]
+        self.human_traj_steps = []
         
         # 3. Initialize Robot State (Position, Goal, Theta)
         (
@@ -169,6 +172,7 @@ class SocialNav(gym.Env):
             self.human_vmaxs,
             self.human_radii,
         ) = self._init_robot_humans(options=options)
+        self._seed_social_force_model()
         if self.human_use_gmm:
             self._seed_human_noise_models()
 
@@ -185,8 +189,7 @@ class SocialNav(gym.Env):
         self.prev_dist_to_goal = np.linalg.norm(self.robot_pos - self.goal_pos)
         
         self.robot_traj.append(self.robot_pos.copy())
-        for i in range(self.num_humans):
-            self.human_trajs[i].append(self.human_positions[i].copy())
+        self.human_traj_steps.append(self.human_positions.copy())
             
         return self._get_obs(), {}
     
@@ -198,6 +201,17 @@ class SocialNav(gym.Env):
             base_seed = int(self.np_random.integers(0, max_seed))
         for i, human in enumerate(self.humans):
             human.gmm.set_seed((base_seed + i) % max_seed)
+
+    def _seed_social_force_model(self, seed=None):
+        if self.sf_helper is None:
+            return
+
+        max_seed = np.iinfo(np.uint32).max
+        if seed is not None:
+            sf_seed = int(seed) % max_seed
+        else:
+            sf_seed = int(self.np_random.integers(0, max_seed))
+        self.sf_helper.set_seed(sf_seed)
 
 
     def step(self, action):
@@ -322,12 +336,14 @@ class SocialNav(gym.Env):
         else:
             exec_actions = np.asarray(nominal_actions, dtype=np.float32)
 
-        # 3. human state update
-        for i, human in enumerate(self.humans):
-            human.step(exec_actions[i])
-            self.human_positions[i] = human.get_pos()
-            self.human_vels[i] = human.u
-            self.human_trajs[i].append(self.human_positions[i].copy())
+        # 3. Human state update (vectorized).
+        self.human_vels, self.human_positions = HumanIntegrator.step_batch(
+            actions=exec_actions,
+            vmaxs=self.human_vmaxs,
+            positions=self.human_positions,
+            dt=self.dt,
+        )
+        self.human_traj_steps.append(self.human_positions.copy())
 
     def _update_robot_state(self, action):
         if self.robot_type == 'unicycle' and self.rl_xy_to_unicycle:
@@ -487,6 +503,37 @@ class SocialNav(gym.Env):
         smooth = x * x * (3.0 - 2.0 * x)  # smoothstep in [0, 1]
         return -float(self.safe_shaping_weight) * float(smooth)
 
+    def _normalize_obs(self, obs):
+        """
+        Scale observation features into roughly comparable ranges.
+        """
+        x = np.asarray(obs, dtype=np.float32).reshape(-1).copy()
+        if x.size == 0:
+            return x
+
+        k = int(self.max_obstacles_obs)
+        robot_v_scale = max(float(getattr(self.robot, "vmax", 1.0)), 1e-6)
+        human_v_scale = max(float(self.human_vmax), 1e-6)
+        rel_scale = max(float(self.sensing_radius), 1e-6)
+        goal_scale = max(float(self.arena_size), 1e-6)
+        radius_scale = max(float(self.human_radius_max), float(self.robot_radius), 1e-6)
+
+        # Robot block: [goal_rel_x, goal_rel_y, vx, vy, theta, radius]
+        x[0:2] /= goal_scale
+        x[2:4] /= robot_v_scale
+        x[4] /= np.pi
+        x[5] /= radius_scale
+
+        # Obstacle blocks: [rel_x, rel_y, vx, vy, radius, mask]
+        if x.size >= 6 + 6 * k:
+            blocks = x[6:6 + 6 * k].reshape(k, 6)
+            blocks[:, 0:2] /= rel_scale
+            blocks[:, 2:4] /= human_v_scale
+            blocks[:, 4] /= radius_scale
+            # mask stays 0/1
+
+        return np.clip(x, -5.0, 5.0)
+
     def _get_obs(self):
         # --- Robot state block ---
         goal_rel = self.robot_pos - self.goal_pos
@@ -507,16 +554,16 @@ class SocialNav(gym.Env):
         if visible_idx.size > 0:
             order = np.argsort(dists[visible_idx])
             selected = visible_idx[order[:k]]
-            for row, idx in enumerate(selected):
-                obs_blocks[row, 0] = rel[idx, 0]
-                obs_blocks[row, 1] = rel[idx, 1]
-                obs_blocks[row, 2] = self.human_vels[idx, 0]
-                obs_blocks[row, 3] = self.human_vels[idx, 1]
-                obs_blocks[row, 4] = self.human_radii[idx]
-                obs_blocks[row, 5] = 1.0  # mask
+            rows = np.arange(selected.size)
+            obs_blocks[rows, 0:2] = rel[selected]
+            obs_blocks[rows, 2:4] = self.human_vels[selected]
+            obs_blocks[rows, 4] = self.human_radii[selected]
+            obs_blocks[rows, 5] = 1.0  # mask
 
-        obs = np.concatenate([robot_state, obs_blocks.reshape(-1)])
-        return obs.astype(np.float32)
+        obs = np.concatenate([robot_state, obs_blocks.reshape(-1)]).astype(np.float32)
+        if self.normalize_obs:
+            obs = self._normalize_obs(obs)
+        return obs
 
     def render(self):
         if self.render_mode is None:
@@ -545,17 +592,19 @@ class SocialNav(gym.Env):
             robot_traj_arr = np.array(self.robot_traj)
             self.ax.plot(robot_traj_arr[:, 0], robot_traj_arr[:, 1], 'b-', alpha=0.5, linewidth=1)
 
-        # Human trajectories
-        for i in range(self.num_humans):
-            if i < len(self.human_trajs) and len(self.human_trajs[i]) > 1:
-                human_traj_arr = np.array(self.human_trajs[i])
-                self.ax.plot(
-                    human_traj_arr[:, 0],
-                    human_traj_arr[:, 1],
-                    color='red',
-                    alpha=0.35,
-                    linewidth=1,
-                )
+        # Human trajectories (time-major cache: [T, N, 2]).
+        if len(self.human_traj_steps) > 1:
+            traj = np.asarray(self.human_traj_steps, dtype=float)
+            if traj.ndim == 3 and traj.shape[1] == self.num_humans:
+                for i in range(self.num_humans):
+                    human_traj_arr = traj[:, i, :]
+                    self.ax.plot(
+                        human_traj_arr[:, 0],
+                        human_traj_arr[:, 1],
+                        color='red',
+                        alpha=0.35,
+                        linewidth=1,
+                    )
 
         # Draw Robot
         robot = plt.Circle(self.robot_pos, self.robot_radius, color='blue', alpha=0.5, label='Robot')
@@ -608,25 +657,31 @@ class SocialNav(gym.Env):
             return
         if not (self.random_goal_changing or self.end_goal_changing):
             return
+        n = int(self.num_humans)
+        if n <= 0:
+            return
 
-        for i in range(self.num_humans):
-            v_pref = float(getattr(self.humans[i], "vmax", 0.0))
-            if v_pref <= 1e-8:
-                continue
+        # Humans with effectively zero preferred speed do not change goals.
+        active = np.asarray(self.human_vmaxs, dtype=float).reshape(n) > 1e-8
+        if not np.any(active):
+            return
 
-            random_trigger = False
-            if self.random_goal_changing and self.np_random.random() <= self.goal_change_chance:
-                random_trigger = True
+        random_trigger = np.zeros((n,), dtype=bool)
+        if self.random_goal_changing:
+            random_vals = self.np_random.random(n)
+            random_trigger = random_vals <= float(self.goal_change_chance)
 
-            end_goal_trigger = False
-            if self.end_goal_changing:
-                dist_to_goal = np.linalg.norm(self.human_positions[i] - self.human_goals[i])
-                near_goal = dist_to_goal <= self.human_radii[i] + 0.1
-                if near_goal and self.np_random.random() <= self.end_goal_change_chance:
-                    end_goal_trigger = True
+        end_goal_trigger = np.zeros((n,), dtype=bool)
+        if self.end_goal_changing:
+            dist_to_goal = np.linalg.norm(self.human_positions - self.human_goals, axis=1)
+            near_goal = dist_to_goal <= (self.human_radii + 0.1)
+            end_vals = self.np_random.random(n)
+            end_goal_trigger = near_goal & (end_vals <= float(self.end_goal_change_chance))
 
-            if random_trigger or end_goal_trigger:
-                self.human_goals[i] = self._sample_new_human_goal(i)
+        trigger = active & (random_trigger | end_goal_trigger)
+        triggered_idx = np.flatnonzero(trigger)
+        for i in triggered_idx:
+            self.human_goals[i] = self._sample_new_human_goal(int(i))
 
     def _sample_new_human_goal(self, idx):
         # Sample goal uniformly in disk with only one hard constraint:

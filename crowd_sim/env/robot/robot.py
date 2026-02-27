@@ -50,7 +50,7 @@ class SingleIntegrator(RobotModel):
         speed = np.linalg.norm(action)
         if speed > self.vmax:
             action = action / speed * self.vmax
-        elif speed < self.vmin:
+        elif speed < abs(self.vmin):
             action = action / speed * self.vmin
 
         self.u = np.asarray(action, dtype=np.float32).reshape(-1)

@@ -34,6 +34,9 @@ class SocialForceHelper:
     def reset(self):
         pass
 
+    def set_seed(self, seed):
+        self.policy.set_seed(seed)
+
     def _ensure_neighbor_pool(self, required):
         required = max(1, int(required))
         current = len(self._neighbor_pool)
@@ -57,6 +60,16 @@ class SocialForceHelper:
         state.vy = float(vel[1])
         state.radius = float(radius)
         state.v_pref = float(v_pref)
+
+    @staticmethod
+    def _expand_param(values, n):
+        arr = np.asarray(values, dtype=float)
+        if arr.ndim == 0:
+            return np.full((n,), float(arr), dtype=float)
+        arr = arr.reshape(-1)
+        if arr.size != n:
+            raise ValueError(f"Expected size {n}, got {arr.size}")
+        return arr
 
     def action_for_human(
         self,
@@ -133,23 +146,74 @@ class SocialForceHelper:
         num_humans = len(human_positions)
         if num_humans == 0:
             return np.zeros((0, 2), dtype=np.float32)
+        if include_robot is None:
+            include_robot = bool(self.sf_params.get("avoid_robot", True))
+        include_robot = bool(include_robot) and robot_pos is not None and robot_vel is not None
 
-        actions = np.zeros((num_humans, 2), dtype=np.float32)
-        for i in range(num_humans):
-            actions[i] = self.action_for_human(
-                human_idx=i,
-                human_positions=human_positions,
-                human_vels=human_vels,
-                human_goals=human_goals,
-                human_radii=human_radii,
-                human_vprefs=human_vprefs,
-                robot_pos=robot_pos,
-                robot_vel=robot_vel,
-                robot_radius=robot_radius,
-                robot_vpref=robot_vpref,
-                include_robot=include_robot,
+        pos = np.asarray(human_positions, dtype=float).reshape(num_humans, 2)
+        vel = np.asarray(human_vels, dtype=float).reshape(num_humans, 2)
+        goals = np.asarray(human_goals, dtype=float).reshape(num_humans, 2)
+        radii = self._expand_param(human_radii, num_humans)
+        v_pref = np.maximum(self._expand_param(human_vprefs, num_humans), 0.0)
+
+        # Pull force to goal (vectorized over humans).
+        goal_delta = goals - pos
+        dist_goal = np.linalg.norm(goal_delta, axis=1)
+        desired_vel = np.zeros((num_humans, 2), dtype=float)
+        valid_goal = dist_goal > 1e-5
+        if np.any(valid_goal):
+            desired_vel[valid_goal] = (
+                goal_delta[valid_goal] / dist_goal[valid_goal, None]
+            ) * v_pref[valid_goal, None]
+        curr_delta = self.policy.KI * (desired_vel - vel)
+
+        # Build neighbor set: all humans (+ optional robot) for pairwise interactions.
+        if include_robot:
+            all_pos = np.vstack([pos, np.asarray(robot_pos, dtype=float).reshape(1, 2)])
+            all_radii = np.concatenate([radii, np.array([float(robot_radius)], dtype=float)])
+        else:
+            all_pos = pos
+            all_radii = radii
+
+        # Pairwise deltas from human i to neighbor j.
+        delta = pos[:, None, :] - all_pos[None, :, :]   # (N, M, 2)
+        dist = np.linalg.norm(delta, axis=2)            # (N, M)
+
+        # Exclude self-self interaction for human neighbors.
+        valid_neighbor = np.ones_like(dist, dtype=bool)
+        valid_neighbor[np.arange(num_humans), np.arange(num_humans)] = False
+
+        B = max(float(self.policy.B), 1e-5)
+        sum_r = radii[:, None] + all_radii[None, :]
+        non_overlap = valid_neighbor & (dist > 1e-5)
+        overlap = valid_neighbor & (~non_overlap)
+
+        interaction = np.zeros((num_humans, 2), dtype=float)
+
+        if np.any(non_overlap):
+            force_mag = self.policy.A * np.exp((sum_r - dist) / B)
+            unit = np.zeros_like(delta)
+            unit[non_overlap] = delta[non_overlap] / dist[non_overlap, None]
+            interaction += np.sum(force_mag[:, :, None] * unit * non_overlap[:, :, None], axis=1)
+
+        if np.any(overlap):
+            # Keep behavior consistent with scalar implementation: random repulsion on exact overlap.
+            overlap_force = self.policy.A * np.exp(sum_r / B)
+            rand_angles = self.policy.rng.uniform(-np.pi, np.pi, size=dist.shape)
+            rand_dirs = np.stack([np.cos(rand_angles), np.sin(rand_angles)], axis=-1)
+            interaction += np.sum(
+                overlap_force[:, :, None] * rand_dirs * overlap[:, :, None], axis=1
             )
-        return actions
+
+        total_delta = (curr_delta + interaction) * float(self.policy.config.env.dt)
+        new_vel = vel + total_delta
+
+        speed = np.linalg.norm(new_vel, axis=1)
+        clip_mask = speed > v_pref
+        if np.any(clip_mask):
+            new_vel[clip_mask] = new_vel[clip_mask] / speed[clip_mask, None] * v_pref[clip_mask, None]
+
+        return new_vel.astype(np.float32, copy=False)
 
     def action_for_robot(
         self,

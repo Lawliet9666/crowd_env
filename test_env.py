@@ -2,6 +2,8 @@ import argparse
 import imageio
 import os
 import numpy as np
+import json
+from datetime import datetime
 
 from config.config import Config
 from crowd_sim.utils import build_env
@@ -10,7 +12,7 @@ import time
 def run_env_test(
     env_name= None,
     max_steps=None,
-    gif_path=None,
+    save_dir=None,
     seed=None,
     human_policy=None,
     human_num=20,
@@ -31,6 +33,7 @@ def run_env_test(
 
     # No robot policy: keep action zero for testing env dynamics.
     action = np.zeros(env.action_space.shape, dtype=np.float32)
+    action[0] = 1 
     time_start = time.time()
 
     while step < max_steps:
@@ -51,23 +54,31 @@ def run_env_test(
     print(f"Total time for {step} steps: {time_end - time_start:.3f}s", flush=True)
 
     if frames:
-        if gif_path is None:
-            human_policy_name = config.human.get('policy', 'nominal') if isinstance(config.human, dict) else getattr(config.human, 'policy', 'nominal')
-            save_dir = "trained_models/env_test"
-            os.makedirs(save_dir, exist_ok=True)
-            gif_path = f"{save_dir}/{env_name}_{human_policy_name}_seed{seed}.gif"
+        os.makedirs(save_dir, exist_ok=True)
+        gif_path = os.path.join(save_dir, f"seed_{seed}.gif")
         imageio.mimsave(gif_path, frames, fps=10)
         print(f"Saved GIF to {gif_path}")
 
     print(f"Steps: {step} | Total Reward: {total_reward:.2f}")
+    result = "running"
     if info.get("is_collision"):
         print("Result: COLLISION")
+        result = "collision"
     elif info.get("is_success"):
         print("Result: SUCCESS")
+        result = "success"
     elif info.get("is_timeout"):
         print("Result: TIMEOUT")
+        result = "timeout"
 
     env.close()
+    return {
+        "seed": int(seed) if seed is not None else None,
+        "steps": int(step),
+        "total_reward": float(total_reward),
+        "result": result,
+        "gif_path": gif_path,
+    }
 
 
 if __name__ == "__main__":
@@ -81,27 +92,42 @@ if __name__ == "__main__":
     )
     parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility")
     parser.add_argument("--steps", type=int, default=200, help="Max steps")
-    parser.add_argument("--save_path", type=str, default=None, help="Output GIF path")
     parser.add_argument("--human_policy", type=str, default=None, choices=["orca", "social_force", "potential_field", "nominal"], help="Human policy to use")
     parser.add_argument("--human_num", type=int, default=20, help="Number of humans in the environment")
+    parser.add_argument("--num_seeds", type=int, default=8, help="How many consecutive seeds to run")
     args = parser.parse_args()
 
     if args.seed is not None:
         np.random.seed(args.seed)
-    for seed in range(args.seed, args.seed + 5):  # Run multiple seeds for robustness
+
+    cfg_preview = Config()
+    policy_name = args.human_policy if args.human_policy is not None else str(cfg_preview.human.get("policy", "nominal"))
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = os.path.join("trained_models", "env_test", f"{run_ts}_{args.env_name}_{policy_name}")
+    os.makedirs(run_dir, exist_ok=True)
+    print(f"Saving test results to: {run_dir}", flush=True)
+
+    summaries = []
+    for seed in range(args.seed, args.seed + args.num_seeds):
         print(f"\n=== Running env test with seed {seed} ===")
-        run_env_test(
+        summary = run_env_test(
             env_name=args.env_name,
             max_steps=args.steps,
-            gif_path=args.save_path,
+            save_dir=run_dir,
             seed=seed,
             human_policy=args.human_policy,
+            human_num=args.human_num,
         )
+        summaries.append(summary)
+
+    summary_path = os.path.join(run_dir, "summary.json")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summaries, f, indent=2)
+    print(f"Saved summary to {summary_path}", flush=True)
 
     # run_env_test(
     #     env_name=args.env_name,
     #     max_steps=args.steps,
-    #     gif_path=args.save_path,
     #     seed=args.seed,
     #     human_policy=args.human_policy,
     # )
