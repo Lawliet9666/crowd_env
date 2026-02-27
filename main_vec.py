@@ -80,7 +80,6 @@ def build_base_hyperparameters(args, config, env_name, max_ep_steps, save_dir, d
         "timesteps_per_batch": args.timesteps_per_batch,
         "max_timesteps_per_episode": max_ep_steps,
         "gamma": args.gamma,
-        "max_grad_norm": args.max_grad_norm,
         "test_ep": args.test_ep,
         "test_viz_ep": args.test_viz_ep,
         "env_name": env_name,
@@ -101,6 +100,7 @@ def build_base_hyperparameters(args, config, env_name, max_ep_steps, save_dir, d
 
 
 def build_sac_hyperparameters(args, base_hyperparameters, config):
+    eval_freq_episodes = args.sac_eval_freq_episodes
     hyperparameters = dict(base_hyperparameters)
     hyperparameters.update(
         {
@@ -112,11 +112,14 @@ def build_sac_hyperparameters(args, base_hyperparameters, config):
             "tau": args.tau,
             "actor_lr": args.actor_lr,
             "critic_lr": args.critic_lr,
+            "max_grad_norm": args.sac_max_grad_norm,
             "auto_alpha": args.auto_alpha,
             "alpha": args.alpha,
             "alpha_lr": args.alpha_lr,
             "target_entropy": args.target_entropy,
             "action_std_init": args.action_std_init,
+            "eval_freq_episodes": eval_freq_episodes,
+            "eval_episodes": args.sac_eval_episodes,
             "cbf_alpha": config.controller_params["cbf_alpha"],
             "cvar_beta": config.controller_params["cvar_beta"],
         }
@@ -135,10 +138,12 @@ def build_ppo_hyperparameters(args, base_hyperparameters, config):
             "num_minibatches": args.ppo_num_minibatches,
             "ent_coef": args.ppo_ent_coef,
             "target_kl": args.ppo_target_kl,
+            "max_grad_norm": args.ppo_max_grad_norm,
             "action_std_init": args.ppo_action_std_init,
             "use_ema": args.ppo_use_ema,
             "ema_decay": args.ppo_ema_decay,
             "eval_freq_episodes": args.ppo_eval_freq_episodes,
+            "eval_episodes": args.ppo_eval_episodes,
             "alpha": config.controller_params["cbf_alpha"],
             "beta": config.controller_params["cvar_beta"],
         }
@@ -277,18 +282,28 @@ def main(args):
         num_envs = max(1, multiprocessing.cpu_count())
         env_fns = [make_env_fn(config, env_name) for _ in range(num_envs)]
         vec_env = AsyncVectorEnv(env_fns)
+        model_hyperparameters = dict(hyperparameters)
+        eval_env = None
+        if args.algo == "sac" and args.sac_eval_freq_episodes > 0 and args.sac_eval_episodes > 0:
+            eval_env = build_env(env_name, render_mode=None, config=config)
+            model_hyperparameters["eval_env"] = eval_env
+        if args.algo == "ppo" and args.ppo_eval_freq_episodes > 0 and args.ppo_eval_episodes > 0:
+            eval_env = build_env(env_name, render_mode=None, config=config)
+            model_hyperparameters["eval_env"] = eval_env
         try:
             train(
                 env=vec_env,
                 num_envs=num_envs,
                 algo=args.algo,
-                hyperparameters=hyperparameters,
+                hyperparameters=model_hyperparameters,
                 actor_model=args.actor_model,
                 critic_model=args.critic_model,
                 total_timesteps=args.total_timesteps,
             )
         finally:
             vec_env.close()
+            if eval_env is not None and hasattr(eval_env, "close"):
+                eval_env.close()
     else:
         actor_model = args.actor_model
         if not actor_model or not os.path.exists(actor_model):

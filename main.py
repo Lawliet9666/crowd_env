@@ -39,7 +39,6 @@ def build_base_hyperparameters(args, config, env_name, max_ep_steps, save_dir, d
         "timesteps_per_batch": args.timesteps_per_batch,
         "max_timesteps_per_episode": max_ep_steps,
         "gamma": args.gamma,
-        "max_grad_norm": args.max_grad_norm,
         "test_ep": args.test_ep,
         "test_viz_ep": args.test_viz_ep,
         "env_name": env_name,
@@ -60,6 +59,7 @@ def build_base_hyperparameters(args, config, env_name, max_ep_steps, save_dir, d
 
 
 def build_sac_hyperparameters(args, base_hyperparameters, config):
+    eval_freq_episodes = args.sac_eval_freq_episodes
     hyperparameters = dict(base_hyperparameters)
     hyperparameters.update(
         {
@@ -71,11 +71,14 @@ def build_sac_hyperparameters(args, base_hyperparameters, config):
             "tau": args.tau,
             "actor_lr": args.actor_lr,
             "critic_lr": args.critic_lr,
+            "max_grad_norm": args.sac_max_grad_norm,
             "auto_alpha": args.auto_alpha,
             "alpha": args.alpha,
             "alpha_lr": args.alpha_lr,
             "target_entropy": args.target_entropy,
             "action_std_init": args.action_std_init,
+            "eval_freq_episodes": eval_freq_episodes,
+            "eval_episodes": args.sac_eval_episodes,
             "cbf_alpha": config.controller_params["cbf_alpha"],
             "cvar_beta": config.controller_params["cvar_beta"],
         }
@@ -94,10 +97,12 @@ def build_ppo_hyperparameters(args, base_hyperparameters, config):
             "num_minibatches": args.ppo_num_minibatches,
             "ent_coef": args.ppo_ent_coef,
             "target_kl": args.ppo_target_kl,
+            "max_grad_norm": args.ppo_max_grad_norm,
             "action_std_init": args.ppo_action_std_init,
             "use_ema": args.ppo_use_ema,
             "ema_decay": args.ppo_ema_decay,
             "eval_freq_episodes": args.ppo_eval_freq_episodes,
+            "eval_episodes": args.ppo_eval_episodes,
             "alpha": config.controller_params["cbf_alpha"],
             "beta": config.controller_params["cvar_beta"],
         }
@@ -144,7 +149,7 @@ def train(env, algo, hyperparameters, actor_model, critic_model, total_timesteps
     model.learn(total_timesteps=total_timesteps)
 
 
-def test(env, actor_model, device, test_episodes=50):
+def test(env, actor_model, device, test_episodes=50, base_seed=None):
     print(f"Testing {actor_model}", flush=True)
 
     if actor_model == "":
@@ -160,7 +165,13 @@ def test(env, actor_model, device, test_episodes=50):
     save_path = os.path.dirname(actor_model)
     policy = RLEvalActorAdapter(policy, env.action_space, device)
 
-    eval_policy(policy=policy, env=env, max_episodes=test_episodes, save_path=save_path)
+    eval_policy(
+        policy=policy,
+        env=env,
+        max_episodes=test_episodes,
+        save_path=save_path,
+        base_seed=base_seed,
+    )
 
 
 def main(args):
@@ -215,16 +226,36 @@ def main(args):
     env = build_env(env_name, render_mode=render_mode, config=config)
 
     if args.mode == "train":
-        train(
-            env=env,
-            algo=args.algo,
-            hyperparameters=hyperparameters,
-            actor_model=args.actor_model,
-            critic_model=args.critic_model,
-            total_timesteps=args.total_timesteps,
-        )
+        model_hyperparameters = dict(hyperparameters)
+        eval_env = None
+        if args.algo == "sac" and args.sac_eval_freq_episodes > 0 and args.sac_eval_episodes > 0:
+            eval_env = build_env(env_name, render_mode=None, config=config)
+            model_hyperparameters["eval_env"] = eval_env
+        if args.algo == "ppo" and args.ppo_eval_freq_episodes > 0 and args.ppo_eval_episodes > 0:
+            eval_env = build_env(env_name, render_mode=None, config=config)
+            model_hyperparameters["eval_env"] = eval_env
+
+        try:
+            train(
+                env=env,
+                algo=args.algo,
+                hyperparameters=model_hyperparameters,
+                actor_model=args.actor_model,
+                critic_model=args.critic_model,
+                total_timesteps=args.total_timesteps,
+            )
+        finally:
+            if eval_env is not None and hasattr(eval_env, "close"):
+                eval_env.close()
     else:
-        test(env=env, actor_model=args.actor_model, device=device, test_episodes=args.test_ep)
+        eval_seed = args.seed if args.eval_seed is None else args.eval_seed
+        test(
+            env=env,
+            actor_model=args.actor_model,
+            device=device,
+            test_episodes=args.test_ep,
+            base_seed=eval_seed,
+        )
 
 
 if __name__ == "__main__":

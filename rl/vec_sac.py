@@ -161,6 +161,8 @@ class VecSAC(SAC):
         self._env_steps_total = 0
         t_so_far = 0
         i_so_far = 0
+        episodes_so_far = 0
+        last_eval_episode_count = 0
 
         next_save_step = self._next_save_step()
 
@@ -168,6 +170,7 @@ class VecSAC(SAC):
             collected_steps, env_steps_collected = self.rollout()
             t_so_far += int(collected_steps)
             i_so_far += 1
+            episodes_so_far += int(len(self.logger.get("batch_lens", [])))
 
             if self.replay_buffer.len >= self.batch_size:
                 # SAC updates are scaled by actual transitions collected in this rollout.
@@ -180,9 +183,20 @@ class VecSAC(SAC):
             self.logger["i_so_far"] = i_so_far
             self._log_summary()
 
+            if (
+                self.eval_env is not None
+                and self.eval_freq_episodes is not None
+                and int(self.eval_freq_episodes) > 0
+                and self.eval_episodes is not None
+                and int(self.eval_episodes) > 0
+                and (episodes_so_far - last_eval_episode_count) >= int(self.eval_freq_episodes)
+            ):
+                self._evaluate_policy_internal(step=t_so_far)
+                last_eval_episode_count = episodes_so_far
+
             if next_save_step is not None:
                 while t_so_far >= next_save_step:
-                    self._save_models(step=t_so_far)
-                    next_save_step += self.save_freq
+                    self._save_models(step=int(next_save_step))
+                    next_save_step += int(self.save_freq)
 
         self._save_models(step=t_so_far)

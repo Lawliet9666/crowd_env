@@ -127,9 +127,7 @@ class PPO:
         print(f"{self.timesteps_per_batch} timesteps per batch for a total of {total_timesteps} timesteps")
         if self.use_ema:
             self._reset_ema_from_actor()
-        next_timestep_save = None
-        if self.save_freq > 0:
-            next_timestep_save = self.save_after_timesteps if self.save_after_timesteps > 0 else self.save_freq
+        next_timestep_save = self._next_save_step()
         t_so_far = 0 # Timesteps simulated so far
         i_so_far = 0 # Iterations ran so far
         episodes_so_far = 0
@@ -139,11 +137,16 @@ class PPO:
             
             episodes_so_far += len(batch_lens)
             
-            # --- EVALUATION BLOCK ---
-            if self.debug and (episodes_so_far - self.last_eval_episode_count) >= self.eval_freq_episodes:
-                self.evaluate_policy_internal(K=50, step=t_so_far)
+            # Evaluate by episode cadence when enabled.
+            should_eval = (
+                hasattr(self, "eval_env")
+                and self.eval_env is not None
+                and int(self.eval_freq_episodes) > 0
+                and int(self.eval_episodes) > 0
+            )
+            if should_eval and (episodes_so_far - self.last_eval_episode_count) >= int(self.eval_freq_episodes):
+                self._evaluate_policy_internal(K=int(self.eval_episodes), step=t_so_far)
                 self.last_eval_episode_count = episodes_so_far
-            # ------------------------
 
             # --- Log Min Barrier (Worst Case Safety) ---
             # We compute this outside the main training loop to avoid slowing down backprop.
@@ -173,14 +176,11 @@ class PPO:
             while next_timestep_save is not None and t_so_far >= next_timestep_save:
                 self._save_model_files(suffix=f"step_{int(next_timestep_save)}")
                 print(f"Saved timestep checkpoint at {int(next_timestep_save)} steps.", flush=True)
-                next_timestep_save += self.save_freq
+                next_timestep_save += int(self.save_freq)
 
             # Logging timesteps so far and iterations so far
             self.logger['t_so_far'] = t_so_far
             self.logger['i_so_far'] = i_so_far
-
-            # Advantage normalization is usually beneficial for PPO stability.
-            A_k = self._normalize_advantage(A_k)
 
             # This is the loop where we update our network for some n epochs
             step = batch_obs.size(0)
@@ -338,9 +338,15 @@ class PPO:
             # Print a summary of our training so far
             self._log_summary()
 
+        # Always write final checkpoints at training end.
+        self._save_model_files()
+        print(f"Saved final checkpoint at {int(t_so_far)} steps.", flush=True)
 
-    def evaluate_policy_internal(self, K, step):
-        print(f"DEBUG: Evaluating policy at step {step}...", flush=True)
+
+    def _evaluate_policy_internal(self, K, step):
+        if not hasattr(self, "eval_env") or self.eval_env is None or K <= 0:
+            return
+        print(f"EVAL: Evaluating policy at step {step}...", flush=True)
         ret_list = []
         len_list = []
         success_count = 0
@@ -400,7 +406,7 @@ class PPO:
         success_rate = success_count / K
         collision_rate = collision_count / K
         
-        print(f"DEBUG: Eval Result - Returns: {avg_ret:.2f}+/-{std_ret:.2f}, Success: {success_rate:.2f}")
+        print(f"EVAL: Returns {avg_ret:.2f}+/-{std_ret:.2f}, Success {success_rate:.2f}", flush=True)
         
         # Log to wandb if initialized
         if wandb.run is not None:
@@ -658,6 +664,14 @@ class PPO:
             torch.save(self.actor_ema.state_dict(), actor_ema_path)
         torch.save(self.critic.state_dict(), critic_path)
 
+    def _next_save_step(self):
+        if int(self.save_freq) <= 0:
+            return None
+        if int(self.save_after_timesteps) <= 0:
+            return int(self.save_freq)
+        k = max(1, (int(self.save_after_timesteps) + int(self.save_freq) - 1) // int(self.save_freq))
+        return k * int(self.save_freq)
+
     def _reset_ema_from_actor(self):
         if not self.use_ema:
             return
@@ -672,16 +686,6 @@ class PPO:
             for p_ema, p in zip(self.actor_ema.parameters(), self.actor.parameters()):
                 p_ema.mul_(self.ema_decay).add_(p.data, alpha=1.0 - self.ema_decay)
 
-    def _normalize_advantage(self, advantages):
-        if not getattr(self, "normalize_advantage", True):
-            return advantages
-        if advantages.numel() == 0:
-            return advantages
-        mean = advantages.mean()
-        std = advantages.std(unbiased=False)
-        eps = float(getattr(self, "adv_norm_eps", 1e-8))
-        return (advantages - mean) / (std + eps)
-
     def _init_hyperparameters(self, hyperparameters):
         # Initialize default values for hyperparameters
         # Algorithm hyperparameters
@@ -695,8 +699,6 @@ class PPO:
         self.lam = 0.98                                 # Lambda Parameter for GAE 
         self.num_minibatches = 6                        # Number of mini-batches for Mini-batch Update
         self.ent_coef = 0                               # Entropy coefficient for Entropy Regularization
-        self.normalize_advantage = True                 # Whether to normalize advantages
-        self.adv_norm_eps = 1e-8                        # Epsilon for advantage normalization
         self.target_kl = 0.02                           # KL Divergence threshold
         self.max_grad_norm = 0.5                        # Gradient Clipping threshold
         self.action_std_init = 0.5                       # Initial action std (learnable)
@@ -704,7 +706,9 @@ class PPO:
         self.ema_decay = 0.995                           # EMA decay for actor parameters
         self.save_after_timesteps = 0                    # First timestep to save checkpoint (0 means disabled)
         self.save_freq = 0                  # Checkpoint interval in timesteps (0 means disabled)
-        self.eval_freq_episodes = 10                     # Eval freq
+        self.eval_freq_episodes = 0                      # Eval disabled by default unless explicitly configured
+        self.eval_episodes = 20                          # Eval episodes per eval trigger
+        self.eval_env = None                             # Optional evaluation environment
 
         # Miscellaneous parameters
         self.render = False                             # If we should render during rollout
@@ -713,7 +717,6 @@ class PPO:
         self.seed = None								# Sets the seed of our program, used for reproducibility of results
         self.save_dir = './'                            # Directory to save models
         self.device = torch.device('cpu')               # Device to run on
-        self.debug = False                                  # If true, evaluate during training
 
         self.safe_dist = 0.8                            # Default safe distance for CBF
         self.alpha = 2.0                                # Default alpha for CBF

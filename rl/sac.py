@@ -185,9 +185,11 @@ class SAC:
             self.q2_target.load_state_dict(self.q1.state_dict())
 
         episode_idx = 0
+        last_eval_episode_count = 0
         ep_len = 0
         ep_ret = 0.0
         t_so_far = 0
+        next_save_step = self._next_save_step()
 
         obs, _ = self.env.reset(seed=self.seed)
 
@@ -227,6 +229,17 @@ class SAC:
                     self.logger["n_collision"] += int(info.get("is_collision", False))
 
                 episode_idx += 1
+                if (
+                    self.eval_env is not None
+                    and self.eval_freq_episodes is not None
+                    and int(self.eval_freq_episodes) > 0
+                    and self.eval_episodes is not None
+                    and int(self.eval_episodes) > 0
+                    and (episode_idx - last_eval_episode_count) >= int(self.eval_freq_episodes)
+                ):
+                    self._evaluate_policy_internal(step=t_so_far)
+                    last_eval_episode_count = episode_idx
+
                 reset_seed = None if self.seed is None else int(self.seed) + episode_idx
                 obs, _ = self.env.reset(seed=reset_seed)
                 ep_len = 0
@@ -237,8 +250,10 @@ class SAC:
                 self.logger["i_so_far"] += 1
                 self._log_summary()
 
-            if self.save_freq > 0 and t_so_far >= self.save_after_timesteps and (t_so_far % self.save_freq == 0):
-                self._save_models(step=t_so_far)
+            if next_save_step is not None:
+                while t_so_far >= next_save_step:
+                    self._save_models(step=int(next_save_step))
+                    next_save_step += int(self.save_freq)
 
         self._save_models(step=t_so_far)
 
@@ -453,6 +468,71 @@ class SAC:
         self.logger["n_success"] = 0
         self.logger["n_collision"] = 0
 
+    @torch.no_grad()
+    def _evaluate_policy_internal(self, step):
+        if self.eval_env is None:
+            return
+        episodes = int(self.eval_episodes)
+        if episodes <= 0:
+            return
+
+        returns = []
+        lengths = []
+        success_count = 0
+        collision_count = 0
+
+        for ep in range(episodes):
+            eval_seed = None if self.eval_seed is None else int(self.eval_seed) + ep
+            obs, _ = self.eval_env.reset(seed=eval_seed)
+
+            done = False
+            ep_ret = 0.0
+            ep_len = 0
+            ep_success = False
+            ep_collision = False
+
+            while not done and ep_len < int(self.max_timesteps_per_episode):
+                action, _ = self.get_action(obs, deterministic=True)
+                obs, rew, terminated, truncated, info = self.eval_env.step(action)
+                done = bool(terminated or truncated)
+                ep_ret += float(rew)
+                ep_len += 1
+
+                if isinstance(info, dict):
+                    ep_success = ep_success or bool(info.get("is_success", False))
+                    ep_collision = ep_collision or bool(info.get("is_collision", False))
+
+            returns.append(ep_ret)
+            lengths.append(ep_len)
+            if ep_success and not ep_collision:
+                success_count += 1
+            if ep_collision:
+                collision_count += 1
+
+        eval_ret_mean = float(np.mean(returns)) if returns else 0.0
+        eval_ret_std = float(np.std(returns)) if returns else 0.0
+        eval_len_mean = float(np.mean(lengths)) if lengths else 0.0
+        success_rate = float(success_count) / float(max(episodes, 1))
+        collision_rate = float(collision_count) / float(max(episodes, 1))
+
+        print(
+            f"[SAC Eval] step={step} return={eval_ret_mean:.2f}±{eval_ret_std:.2f} "
+            f"len={eval_len_mean:.1f} success={success_rate:.3f} collision={collision_rate:.3f}",
+            flush=True,
+        )
+
+        if wandb.run is not None:
+            wandb.log(
+                {
+                    "eval/return_mean": eval_ret_mean,
+                    "eval/return_std": eval_ret_std,
+                    "eval/ep_length_mean": eval_len_mean,
+                    "eval/success_rate": success_rate,
+                    "eval/collision_rate": collision_rate,
+                },
+                step=step,
+            )
+
     def _save_models(self, step):
         os.makedirs(self.save_dir, exist_ok=True)
 
@@ -480,6 +560,14 @@ class SAC:
             checkpoint_path,
         )
         print(f"[SAC] Saved checkpoints at step {step}: {actor_path}, {critic_path}", flush=True)
+
+    def _next_save_step(self):
+        if int(self.save_freq) <= 0:
+            return None
+        if int(self.save_after_timesteps) <= 0:
+            return int(self.save_freq)
+        k = max(1, (int(self.save_after_timesteps) + int(self.save_freq) - 1) // int(self.save_freq))
+        return k * int(self.save_freq)
 
     def _build_actor(self, policy_class):
         actor_kwargs = {
@@ -567,6 +655,9 @@ class SAC:
         self.save_dir = "./"
         self.seed = None
         self.eval_seed = None
+        self.eval_env = None
+        self.eval_freq_episodes = 0
+        self.eval_episodes = 20
         self.device = torch.device("cpu")
 
         self.safe_dist = 0.8
