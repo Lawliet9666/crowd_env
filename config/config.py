@@ -24,7 +24,7 @@ class Config:
         self.env = BaseConfig()
         self.env.name = "social_nav_var_num"
         self.env.dt = 0.1
-        self.env.max_steps = 200
+        self.env.max_steps = 400
         self.env.sensing_radius = 20.0
         self.env.max_obstacles_obs = 1
         self.env.normalize_obs = False
@@ -42,8 +42,8 @@ class Config:
         # self.human.radius = 0.3
         self.human.vmax = (0.5, 1.5)
         self.human.arena_size = 6.0
-        self.human.policy = "nominal"  # 'nominal', 'orca', 'social_force', or 'potential_field'
-        self.human.num_humans = 1
+        self.human.policy = "social_force"  # 'nominal', 'orca', 'social_force', or 'potential_field'
+        self.human.num_humans = 20
         self.human.human_num_range = 0
         self.human.randomize_attributes = True
         # Whether to apply GMM perturbation to human actions in env.step.
