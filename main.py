@@ -1,191 +1,232 @@
 """
-	Entry point for training/testing SAC in crowd navigation environments.
+    Entry point for training/testing SAC or PPO in crowd navigation environments.
 """
 
-import sys
-import torch
-import wandb
 import os
 import random
-import numpy as np
+import sys
 from datetime import datetime
+
+import numpy as np
+import torch
+import wandb
 
 from config.arguments import get_args
 from config.config import Config
-from rl.sac import SAC
-from rl.network import FCNet 
-from eval_policy_v2 import RLEvalActorAdapter, eval_policy
 from crowd_sim.utils import build_env
+from eval_policy_v2 import RLEvalActorAdapter, eval_policy
+from rl.network import FCNet
+from rl.ppo_optimized import PPO
+from rl.sac import SAC
+
+
+ALGO_TO_MODEL = {
+    "sac": SAC,
+    "ppo": PPO,
+}
+
 
 def set_global_seeds(seed):
-	random.seed(seed)
-	np.random.seed(seed)
-	torch.manual_seed(seed)
-	if torch.cuda.is_available():
-		torch.cuda.manual_seed_all(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
-def train(env, hyperparameters, actor_model, critic_model, total_timesteps):
-	print(f"Training", flush=True)
+def build_base_hyperparameters(args, config, env_name, max_ep_steps, save_dir, device):
+    return {
+        "timesteps_per_batch": args.timesteps_per_batch,
+        "max_timesteps_per_episode": max_ep_steps,
+        "gamma": args.gamma,
+        "max_grad_norm": args.max_grad_norm,
+        "test_ep": args.test_ep,
+        "test_viz_ep": args.test_viz_ep,
+        "env_name": env_name,
+        "render": args.render,
+        "render_every_i": args.render_every_i,
+        "save_after_timesteps": args.save_after_timesteps,
+        "save_freq": args.save_freq,
+        "seed": args.seed,
+        "eval_seed": args.seed if args.eval_seed is None else args.eval_seed,
+        "save_dir": save_dir,
+        "device": device,
+        "safe_dist": config.controller_params["safety_margin"] + config.human_params["radius"] + config.robot_params["radius"],
+        "robot_type": config.robot_params["type"],
+        "vmax": config.robot_params["vmax"],
+        "amax": config.robot_params["amax"],
+        "omega_max": config.robot_params["omega_max"],
+    }
 
-	# Create a model for SAC.
-	model = SAC(policy_class=FCNet, env=env, **hyperparameters)
-	# model = SAC(policy_class=DiffCBF_NN, env=env, **hyperparameters)
 
-	# Optional warm start: actor-only, critic-only, or both.
-	loaded_parts = []
-	if actor_model != '':
-		if not os.path.exists(actor_model):
-			print(f"Actor checkpoint not found: {actor_model}", flush=True)
-			sys.exit(0)
-		model.actor.load_state_dict(torch.load(actor_model, map_location=hyperparameters['device']))
-		loaded_parts.append(f"actor={actor_model}")
+def build_sac_hyperparameters(args, base_hyperparameters, config):
+    hyperparameters = dict(base_hyperparameters)
+    hyperparameters.update(
+        {
+            "buffer_size": args.buffer_size,
+            "batch_size": args.batch_size,
+            "start_timesteps": args.start_timesteps,
+            "updates_per_step": args.updates_per_step,
+            "hidden_sizes": tuple(args.hidden_sizes),
+            "tau": args.tau,
+            "actor_lr": args.actor_lr,
+            "critic_lr": args.critic_lr,
+            "auto_alpha": args.auto_alpha,
+            "alpha": args.alpha,
+            "alpha_lr": args.alpha_lr,
+            "target_entropy": args.target_entropy,
+            "action_std_init": args.action_std_init,
+            "cbf_alpha": config.controller_params["cbf_alpha"],
+            "cvar_beta": config.controller_params["cvar_beta"],
+        }
+    )
+    return hyperparameters
 
-	if critic_model != '':
-		if not os.path.exists(critic_model):
-			print(f"Critic checkpoint not found: {critic_model}", flush=True)
-			sys.exit(0)
-		model.critic.load_state_dict(torch.load(critic_model, map_location=hyperparameters['device']))
-		loaded_parts.append(f"critic={critic_model}")
 
-	if loaded_parts:
-		print(f"Warm start loaded: {', '.join(loaded_parts)}", flush=True)
-	else:
-		print(f"Training from scratch.", flush=True)
+def build_ppo_hyperparameters(args, base_hyperparameters, config):
+    hyperparameters = dict(base_hyperparameters)
+    hyperparameters.update(
+        {
+            "n_updates_per_iteration": args.ppo_n_updates_per_iteration,
+            "lr": args.ppo_lr,
+            "clip": args.ppo_clip,
+            "lam": args.ppo_lam,
+            "num_minibatches": args.ppo_num_minibatches,
+            "ent_coef": args.ppo_ent_coef,
+            "target_kl": args.ppo_target_kl,
+            "action_std_init": args.ppo_action_std_init,
+            "use_ema": args.ppo_use_ema,
+            "ema_decay": args.ppo_ema_decay,
+            "eval_freq_episodes": args.ppo_eval_freq_episodes,
+            "alpha": config.controller_params["cbf_alpha"],
+            "beta": config.controller_params["cvar_beta"],
+        }
+    )
+    return hyperparameters
 
-	# Train SAC with a specified total timesteps
-	model.learn(total_timesteps=total_timesteps)
-	
+
+def train(env, algo, hyperparameters, actor_model, critic_model, total_timesteps):
+    print(f"Training ({algo.upper()})", flush=True)
+
+    model_cls = ALGO_TO_MODEL[algo]
+    model = model_cls(policy_class=FCNet, env=env, **hyperparameters)
+
+    loaded_parts = []
+    if actor_model != "":
+        if not os.path.exists(actor_model):
+            print(f"Actor checkpoint not found: {actor_model}", flush=True)
+            sys.exit(0)
+        model.actor.load_state_dict(torch.load(actor_model, map_location=hyperparameters["device"]))
+        if hasattr(model, "_reset_ema_from_actor"):
+            model._reset_ema_from_actor()
+        loaded_parts.append(f"actor={actor_model}")
+
+    if critic_model != "":
+        if not os.path.exists(critic_model):
+            print(f"Critic checkpoint not found: {critic_model}", flush=True)
+            sys.exit(0)
+        critic_state = torch.load(critic_model, map_location=hyperparameters["device"])
+        if algo == "sac":
+            model.q1.load_state_dict(critic_state)
+            model.q2.load_state_dict(critic_state, strict=False)
+            model.q1_target.load_state_dict(model.q1.state_dict())
+            model.q2_target.load_state_dict(model.q2.state_dict())
+            loaded_parts.append(f"critic(q1/q2)={critic_model}")
+        else:
+            model.critic.load_state_dict(critic_state)
+            loaded_parts.append(f"critic={critic_model}")
+
+    if loaded_parts:
+        print(f"Warm start loaded: {', '.join(loaded_parts)}", flush=True)
+    else:
+        print("Training from scratch.", flush=True)
+
+    model.learn(total_timesteps=total_timesteps)
+
 
 def test(env, actor_model, device, test_episodes=50):
-	print(f"Testing {actor_model}", flush=True)
+    print(f"Testing {actor_model}", flush=True)
 
-	# If the actor model is not specified, then exit
-	if actor_model == '':
-		print(f"Didn't specify model file. Exiting.", flush=True)
-		sys.exit(0)
+    if actor_model == "":
+        print("Didn't specify model file. Exiting.", flush=True)
+        sys.exit(0)
 
-	# Extract out dimensions of observation and action spaces
-	obs_dim = env.observation_space.shape[0]
-	act_dim = env.action_space.shape[0]
+    obs_dim = env.observation_space.shape[0]
+    act_dim = env.action_space.shape[0]
 
-	# Build our policy the same way we build our actor model in training
-	policy = FCNet(obs_dim, act_dim).to(device)
+    policy = FCNet(obs_dim, act_dim).to(device)
+    policy.load_state_dict(torch.load(actor_model, map_location=device))
 
-	# Load in the actor model saved by SAC
-	policy.load_state_dict(torch.load(actor_model, map_location=device))
+    save_path = os.path.dirname(actor_model)
+    policy = RLEvalActorAdapter(policy, env.action_space, device)
 
-	save_path = os.path.dirname(actor_model)
+    eval_policy(policy=policy, env=env, max_episodes=test_episodes, save_path=save_path)
 
-	# Wrap raw network with deterministic action adapter expected by eval_policy_v2.
-	policy = RLEvalActorAdapter(policy, env.action_space, device)
-
-	# Evaluate policy with a separate module to demonstrate
-	# that once we are done training, we no longer need sac.py since it only contains
-	# the training algorithm. The model/policy itself exists
-	# independently as a binary file that can be loaded in with torch.
-
-	eval_policy(policy=policy, env=env, max_episodes=test_episodes, save_path=save_path)
-	
 
 def main(args):
-	set_global_seeds(args.seed)
+    set_global_seeds(args.seed)
 
-	config = Config() # input the config path if needed
-	env_name = config.env.get('name', 'social_nav_var_num')
+    config = Config()
+    env_name = config.env.get("name", "social_nav_var_num")
 
-	# Create directory for saving models
-	# Structure: trained_models/{model_folder}/{timestamp}_{exp_name}/
-	now = datetime.now()
-	timestamp = now.strftime("%Y%m%d_%H%M%S")
-	exp_name = f"{timestamp}_{config.robot_params['type']}_{args.method}"
-	save_dir = f"./trained_models/{args.model_folder}/{exp_name}" # Directory to save models and evaluation results (like GIFs)
-	
-	if args.mode == 'train':
-		os.makedirs(save_dir, exist_ok=True)
-		print(f"Models will be saved to: {save_dir}")
+    now = datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    exp_name = f"{timestamp}_{config.robot_params['type']}_{args.method}_{args.algo}"
+    save_dir = f"./trained_models/{args.model_folder}/{exp_name}"
 
-	# Determine device
-	if args.device == 'cuda':
-		if torch.cuda.is_available():
-			device = torch.device('cuda')
-			print(f"Using GPU: {torch.cuda.get_device_name(0)}", flush=True)
-		else:
-			device = torch.device('cpu')
-			print("GPU requested but not available. Using CPU.", flush=True)
-	else:
-		device = torch.device('cpu')
-		print("Using CPU.", flush=True)
+    if args.mode == "train":
+        os.makedirs(save_dir, exist_ok=True)
+        print(f"Models will be saved to: {save_dir}")
 
-	max_ep_steps = config.env.max_steps if args.max_timesteps_per_episode is None else args.max_timesteps_per_episode
+    if args.device == "cuda":
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            print(f"Using GPU: {torch.cuda.get_device_name(0)}", flush=True)
+        else:
+            device = torch.device("cpu")
+            print("GPU requested but not available. Using CPU.", flush=True)
+    else:
+        device = torch.device("cpu")
+        print("Using CPU.", flush=True)
 
-	hyperparameters = {
-		# SAC Hyperparameters
-		'timesteps_per_batch': args.timesteps_per_batch,
-		'max_timesteps_per_episode': max_ep_steps,
-		'buffer_size': args.buffer_size,
-		'batch_size': args.batch_size,
-		'start_timesteps': args.start_timesteps,
-		'updates_per_step': args.updates_per_step,
-		'hidden_sizes': tuple(args.hidden_sizes),
-		'gamma': args.gamma,
-		'tau': args.tau,
-		'actor_lr': args.actor_lr,
-		'critic_lr': args.critic_lr,
-		'max_grad_norm': args.max_grad_norm,
-		'auto_alpha': args.auto_alpha,
-		'alpha': args.alpha,
-		'alpha_lr': args.alpha_lr,
-		'target_entropy': args.target_entropy,
-		'action_std_init': args.action_std_init,
-		# Other parameters
-		'test_ep': args.test_ep,
-		'test_viz_ep': args.test_viz_ep,
-		'env_name': env_name,
-		'render': args.render,
-		'render_every_i': args.render_every_i,
-		'save_after_timesteps': args.save_after_timesteps,
-		'save_freq': args.save_freq,
-		'seed': args.seed,
-		'eval_seed': args.seed if args.eval_seed is None else args.eval_seed,
-		'save_dir': save_dir,
-		'device': device,
-		# Environment Parameters
-		'safe_dist': config.controller_params['safety_margin'] + config.human_params['radius'] + config.robot_params['radius'],
-		'cbf_alpha': config.controller_params['cbf_alpha'],
-		'cvar_beta': config.controller_params['cvar_beta'],
-		'robot_type': config.robot_params['type'],
-		'vmax': config.robot_params['vmax'],
-		'amax': config.robot_params['amax'],
-		'omega_max': config.robot_params['omega_max'],
-	}
+    max_ep_steps = config.env.max_steps if args.max_timesteps_per_episode is None else args.max_timesteps_per_episode
+    base_hyperparameters = build_base_hyperparameters(
+        args=args,
+        config=config,
+        env_name=env_name,
+        max_ep_steps=max_ep_steps,
+        save_dir=save_dir,
+        device=device,
+    )
 
-	# Initialize wandb if training
-	if args.mode == 'train':
-		wandb.init(
-			project="rl_adaptive_cvar_cbf_sac", 
-			name=exp_name,
-			config=hyperparameters
-		)
+    if args.algo == "sac":
+        hyperparameters = build_sac_hyperparameters(args, base_hyperparameters, config)
+    else:
+        hyperparameters = build_ppo_hyperparameters(args, base_hyperparameters, config)
 
-	# Creates the environment we'll be running. If you want to replace with your own
-	# custom environment, note that it must inherit Gym and have both continuous
-	# observation and action spaces.
-	render_mode = 'human' if args.mode == 'test' else None #  'rgb_array'for save fig or 'human' for visualization
-	env = build_env(env_name, render_mode=render_mode, config=config)
+    if args.mode == "train":
+        wandb.init(
+            project=f"rl_adaptive_cvar_cbf_{args.algo}",
+            name=exp_name,
+            config=hyperparameters,
+        )
 
-	# Train or test, depending on the mode specified
-	if args.mode == 'train':
-		train(
-			env=env,
-			hyperparameters=hyperparameters,
-			actor_model=args.actor_model,
-			critic_model=args.critic_model,
-			total_timesteps=args.total_timesteps,
-		)
-	else:
-		test(env=env, actor_model=args.actor_model, device=device, test_episodes=args.test_ep)
+    render_mode = "human" if args.mode == "test" else None
+    env = build_env(env_name, render_mode=render_mode, config=config)
 
-if __name__ == '__main__':
-	args = get_args() # Parse arguments from command line
-	main(args)
+    if args.mode == "train":
+        train(
+            env=env,
+            algo=args.algo,
+            hyperparameters=hyperparameters,
+            actor_model=args.actor_model,
+            critic_model=args.critic_model,
+            total_timesteps=args.total_timesteps,
+        )
+    else:
+        test(env=env, actor_model=args.actor_model, device=device, test_episodes=args.test_ep)
+
+
+if __name__ == "__main__":
+    args = get_args()
+    main(args)

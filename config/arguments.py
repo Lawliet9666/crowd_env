@@ -5,6 +5,7 @@ def get_args():
 	parser = argparse.ArgumentParser()
 
 	parser.add_argument('--mode', dest='mode', type=str, default='train', choices=['train', 'test'])  # can be 'train' or 'test'
+	parser.add_argument('--algo', dest='algo', type=str, default='sac', choices=['sac', 'ppo'], help='RL algorithm to run')
 	parser.add_argument('--actor_model', dest='actor_model', type=str, default='')   # for test mode: trained actor checkpoint
 	parser.add_argument('--critic_model', dest='critic_model', type=str, default='')  # optional warm-start critic checkpoint
 	parser.add_argument(
@@ -44,6 +45,21 @@ def get_args():
 	parser.add_argument('--alpha_lr', type=float, default=3e-4, help='Learning rate for temperature when auto_alpha is enabled')
 	parser.add_argument('--target_entropy', type=float, default=-1.2, help='Target entropy for auto_alpha')
 	parser.add_argument('--action_std_init', type=float, default=0.20, help='Initial policy std (before tanh squash)')
+
+	# PPO-specific optimization defaults
+	parser.add_argument('--ppo_n_updates_per_iteration', type=int, default=8)
+	parser.add_argument('--ppo_lr', type=float, default=1e-4)
+	parser.add_argument('--ppo_clip', type=float, default=0.2)
+	parser.add_argument('--ppo_lam', type=float, default=0.98)
+	parser.add_argument('--ppo_num_minibatches', type=int, default=8)
+	parser.add_argument('--ppo_ent_coef', type=float, default=0.01)
+	parser.add_argument('--ppo_disable_adv_norm', action='store_true', default=True, help='Disable advantage normalization in PPO')
+	parser.add_argument('--ppo_adv_norm_eps', type=float, default=1e-8, help='Epsilon for advantage normalization in PPO')
+	parser.add_argument('--ppo_target_kl', type=float, default=0.02)
+	parser.add_argument('--ppo_action_std_init', type=float, default=0.5)
+	parser.add_argument('--ppo_use_ema', dest='ppo_use_ema', action='store_true', default=False)
+	parser.add_argument('--ppo_ema_decay', type=float, default=0.995)
+	parser.add_argument('--ppo_eval_freq_episodes', type=int, default=20)
 
 	# Evaluation / logging
 	parser.add_argument('--test_ep', type=int, default=100, help='Number of episodes for testing')

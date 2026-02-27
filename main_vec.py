@@ -1,5 +1,5 @@
 """
-Entry point for running SAC with vectorized environments.
+Entry point for running SAC or PPO with vectorized environments.
 """
 
 import multiprocessing
@@ -18,7 +18,14 @@ from config.config import Config
 from crowd_sim.utils import build_env, dump_test_config, dump_train_config
 from eval_policy_v2 import RLEvalActorAdapter, eval_policy, run_crossing_scenario
 from rl.network import FCNet
+from rl.vec_ppo import VecPPO
 from rl.vec_sac import VecSAC
+
+
+ALGO_TO_MODEL = {
+    "sac": VecSAC,
+    "ppo": VecPPO,
+}
 
 
 def make_env_fn(config, env_name):
@@ -44,8 +51,8 @@ def prepare_test_save_dir(actor_model):
     return run_dir
 
 
-def derive_train_exp_name(timestamp, robot_type, method, actor_model):
-    default_name = f"{timestamp}_{robot_type}_{method}"
+def derive_train_exp_name(timestamp, robot_type, method, algo, actor_model):
+    default_name = f"{timestamp}_{robot_type}_{method}_{algo}"
     if not actor_model:
         return default_name
 
@@ -68,11 +75,83 @@ def ensure_unique_exp_name(base_root, exp_name):
     return candidate
 
 
-def train(env, num_envs, hyperparameters, actor_model, critic_model, total_timesteps):
-    print(f"Training with {num_envs} vectorized environments", flush=True)
-    print("Algorithm: SAC, Policy: FCNet", flush=True)
+def build_base_hyperparameters(args, config, env_name, max_ep_steps, save_dir, device):
+    return {
+        "timesteps_per_batch": args.timesteps_per_batch,
+        "max_timesteps_per_episode": max_ep_steps,
+        "gamma": args.gamma,
+        "max_grad_norm": args.max_grad_norm,
+        "test_ep": args.test_ep,
+        "test_viz_ep": args.test_viz_ep,
+        "env_name": env_name,
+        "render": args.render,
+        "render_every_i": args.render_every_i,
+        "save_after_timesteps": args.save_after_timesteps,
+        "save_freq": args.save_freq,
+        "seed": args.seed,
+        "eval_seed": args.seed if args.eval_seed is None else args.eval_seed,
+        "save_dir": save_dir,
+        "device": device,
+        "safe_dist": config.controller_params["safety_margin"] + config.human_params["radius"] + config.robot_params["radius"],
+        "robot_type": config.robot_params["type"],
+        "vmax": config.robot_params["vmax"],
+        "amax": config.robot_params["amax"],
+        "omega_max": config.robot_params["omega_max"],
+    }
 
-    model = VecSAC(policy_class=FCNet, env=env, num_envs=num_envs, **hyperparameters)
+
+def build_sac_hyperparameters(args, base_hyperparameters, config):
+    hyperparameters = dict(base_hyperparameters)
+    hyperparameters.update(
+        {
+            "buffer_size": args.buffer_size,
+            "batch_size": args.batch_size,
+            "start_timesteps": args.start_timesteps,
+            "updates_per_step": args.updates_per_step,
+            "hidden_sizes": tuple(args.hidden_sizes),
+            "tau": args.tau,
+            "actor_lr": args.actor_lr,
+            "critic_lr": args.critic_lr,
+            "auto_alpha": args.auto_alpha,
+            "alpha": args.alpha,
+            "alpha_lr": args.alpha_lr,
+            "target_entropy": args.target_entropy,
+            "action_std_init": args.action_std_init,
+            "cbf_alpha": config.controller_params["cbf_alpha"],
+            "cvar_beta": config.controller_params["cvar_beta"],
+        }
+    )
+    return hyperparameters
+
+
+def build_ppo_hyperparameters(args, base_hyperparameters, config):
+    hyperparameters = dict(base_hyperparameters)
+    hyperparameters.update(
+        {
+            "n_updates_per_iteration": args.ppo_n_updates_per_iteration,
+            "lr": args.ppo_lr,
+            "clip": args.ppo_clip,
+            "lam": args.ppo_lam,
+            "num_minibatches": args.ppo_num_minibatches,
+            "ent_coef": args.ppo_ent_coef,
+            "target_kl": args.ppo_target_kl,
+            "action_std_init": args.ppo_action_std_init,
+            "use_ema": args.ppo_use_ema,
+            "ema_decay": args.ppo_ema_decay,
+            "eval_freq_episodes": args.ppo_eval_freq_episodes,
+            "alpha": config.controller_params["cbf_alpha"],
+            "beta": config.controller_params["cvar_beta"],
+        }
+    )
+    return hyperparameters
+
+
+def train(env, num_envs, algo, hyperparameters, actor_model, critic_model, total_timesteps):
+    print(f"Training with {num_envs} vectorized environments", flush=True)
+    print(f"Algorithm: {algo.upper()}, Policy: FCNet", flush=True)
+
+    model_cls = ALGO_TO_MODEL[algo]
+    model = model_cls(policy_class=FCNet, env=env, num_envs=num_envs, **hyperparameters)
 
     loaded_parts = []
     if actor_model != "":
@@ -80,6 +159,8 @@ def train(env, num_envs, hyperparameters, actor_model, critic_model, total_times
             print(f"Actor checkpoint not found: {actor_model}", flush=True)
             sys.exit(0)
         model.actor.load_state_dict(torch.load(actor_model, map_location=hyperparameters["device"]))
+        if hasattr(model, "_reset_ema_from_actor"):
+            model._reset_ema_from_actor()
         loaded_parts.append(f"actor={actor_model}")
 
     if critic_model != "":
@@ -87,11 +168,15 @@ def train(env, num_envs, hyperparameters, actor_model, critic_model, total_times
             print(f"Critic checkpoint not found: {critic_model}", flush=True)
             sys.exit(0)
         critic_state = torch.load(critic_model, map_location=hyperparameters["device"])
-        model.q1.load_state_dict(critic_state)
-        model.q2.load_state_dict(critic_state, strict=False)
-        model.q1_target.load_state_dict(model.q1.state_dict())
-        model.q2_target.load_state_dict(model.q2.state_dict())
-        loaded_parts.append(f"critic(q1/q2)={critic_model}")
+        if algo == "sac":
+            model.q1.load_state_dict(critic_state)
+            model.q2.load_state_dict(critic_state, strict=False)
+            model.q1_target.load_state_dict(model.q1.state_dict())
+            model.q2_target.load_state_dict(model.q2.state_dict())
+            loaded_parts.append(f"critic(q1/q2)={critic_model}")
+        else:
+            model.critic.load_state_dict(critic_state)
+            loaded_parts.append(f"critic={critic_model}")
 
     if loaded_parts:
         print(f"Warm start loaded: {', '.join(loaded_parts)}", flush=True)
@@ -101,13 +186,13 @@ def train(env, num_envs, hyperparameters, actor_model, critic_model, total_times
     model.learn(total_timesteps=total_timesteps)
 
 
-def test(env, actor_model, device, method, hyperparameters):
+def test(env, actor_model, device, method, hyperparameters, algo):
     print(f"Testing {actor_model}", flush=True)
     if actor_model == "":
         print("Didn't specify model file. Exiting.", flush=True)
         sys.exit(0)
 
-    print("Algorithm: SAC, Policy: FCNet", flush=True)
+    print(f"Algorithm: {algo.upper()}, Policy: FCNet", flush=True)
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
 
@@ -157,49 +242,25 @@ def main(args):
     timestamp = now.strftime("%Y%m%d_%H%M%S")
     robot_type = config.robot_params["type"]
     train_root = os.path.join(".", "trained_models", args.model_folder)
-    exp_name = derive_train_exp_name(timestamp, robot_type, args.method, args.actor_model)
+    exp_name = derive_train_exp_name(timestamp, robot_type, args.method, args.algo, args.actor_model)
     if args.mode == "train":
         exp_name = ensure_unique_exp_name(train_root, exp_name)
     save_dir = os.path.join(train_root, exp_name)
 
     max_ep_steps = config.env.max_steps if args.max_timesteps_per_episode is None else args.max_timesteps_per_episode
-    hyperparameters = {
-        "timesteps_per_batch": args.timesteps_per_batch,
-        "max_timesteps_per_episode": max_ep_steps,
-        "buffer_size": args.buffer_size,
-        "batch_size": args.batch_size,
-        "start_timesteps": args.start_timesteps,
-        "updates_per_step": args.updates_per_step,
-        "hidden_sizes": tuple(args.hidden_sizes),
-        "gamma": args.gamma,
-        "tau": args.tau,
-        "actor_lr": args.actor_lr,
-        "critic_lr": args.critic_lr,
-        "max_grad_norm": args.max_grad_norm,
-        "auto_alpha": args.auto_alpha,
-        "alpha": args.alpha,
-        "alpha_lr": args.alpha_lr,
-        "target_entropy": args.target_entropy,
-        "action_std_init": args.action_std_init,
-        "test_ep": args.test_ep,
-        "test_viz_ep": args.test_viz_ep,
-        "env_name": env_name,
-        "render": args.render,
-        "render_every_i": args.render_every_i,
-        "save_after_timesteps": args.save_after_timesteps,
-        "save_freq": args.save_freq,
-        "seed": args.seed,
-        "eval_seed": args.seed if args.eval_seed is None else args.eval_seed,
-        "save_dir": save_dir,
-        "device": device,
-        "safe_dist": config.controller_params["safety_margin"] + config.human_params["radius"] + config.robot_params["radius"],
-        "cbf_alpha": config.controller_params["cbf_alpha"],
-        "cvar_beta": config.controller_params["cvar_beta"],
-        "robot_type": config.robot_params["type"],
-        "vmax": config.robot_params["vmax"],
-        "amax": config.robot_params["amax"],
-        "omega_max": config.robot_params["omega_max"],
-    }
+    base_hyperparameters = build_base_hyperparameters(
+        args=args,
+        config=config,
+        env_name=env_name,
+        max_ep_steps=max_ep_steps,
+        save_dir=save_dir,
+        device=device,
+    )
+
+    if args.algo == "sac":
+        hyperparameters = build_sac_hyperparameters(args, base_hyperparameters, config)
+    else:
+        hyperparameters = build_ppo_hyperparameters(args, base_hyperparameters, config)
 
     if args.mode == "train":
         os.makedirs(save_dir, exist_ok=True)
@@ -208,10 +269,10 @@ def main(args):
             args,
             config,
             hyperparameters,
-            extra={"seed": args.seed, "eval_seed": args.eval_seed, "method": args.method},
+            extra={"seed": args.seed, "eval_seed": args.eval_seed, "method": args.method, "algo": args.algo},
         )
         print(f"Models will be saved to: {save_dir}", flush=True)
-        wandb.init(project="rl_adaptive_cvar_cbf_sac", name=exp_name, config=hyperparameters)
+        wandb.init(project=f"rl_adaptive_cvar_cbf_{args.algo}", name=exp_name, config=hyperparameters)
 
         num_envs = max(1, multiprocessing.cpu_count())
         env_fns = [make_env_fn(config, env_name) for _ in range(num_envs)]
@@ -220,6 +281,7 @@ def main(args):
             train(
                 env=vec_env,
                 num_envs=num_envs,
+                algo=args.algo,
                 hyperparameters=hyperparameters,
                 actor_model=args.actor_model,
                 critic_model=args.critic_model,
@@ -239,11 +301,18 @@ def main(args):
             test_save_dir,
             config,
             hyperparameters=hyperparameters,
-            extra={"eval_seed": args.eval_seed, "method": args.method},
+            extra={"eval_seed": args.eval_seed, "method": args.method, "algo": args.algo},
         )
 
         env = build_env(env_name, render_mode="rgb_array", config=config)
-        test(env=env, actor_model=actor_model, device=device, method=args.method, hyperparameters=hyperparameters)
+        test(
+            env=env,
+            actor_model=actor_model,
+            device=device,
+            method=args.method,
+            hyperparameters=hyperparameters,
+            algo=args.algo,
+        )
 
 
 if __name__ == "__main__":
