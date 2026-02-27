@@ -22,6 +22,7 @@ class SocialNav(gym.Env):
         self.max_steps = env_params['max_steps']
         self.sensing_radius = float(env_params.get('sensing_radius', 5.0))
         self.max_obstacles_obs = int(env_params.get('max_obstacles_obs', 10))
+        self.normalize_obs = bool(env_params.get('normalize_obs', False))
         self.rl_xy_to_unicycle = bool(env_params.get('rl_xy_to_unicycle', False))
         self.unicycle_k_omega = float(env_params.get('unicycle_k_omega', 2.0))
 
@@ -72,6 +73,7 @@ class SocialNav(gym.Env):
         self.human_circle_radius = self.arena_size * np.sqrt(2) 
 
         self.human_policy_name = human_params.get('policy', 'nominal')
+        self.human_use_gmm = bool(human_params.get('use_gmm', True))
         self.random_goal_changing = bool(human_params.get('random_goal_changing', False))
         self.goal_change_chance = float(np.clip(human_params.get('goal_change_chance', 0.0), 0.0, 1.0))
         self.end_goal_changing = bool(human_params.get('end_goal_changing', False))
@@ -168,7 +170,8 @@ class SocialNav(gym.Env):
             self.human_vmaxs,
             self.human_radii,
         ) = self._init_robot_humans(options=options)
-        self._seed_human_noise_models()
+        if self.human_use_gmm:
+            self._seed_human_noise_models()
 
         # 4. Reset Internal Dynamics Models
         # Robot: [x, y, theta, v]
@@ -309,13 +312,16 @@ class SocialNav(gym.Env):
             for i, human in enumerate(self.humans):
                 nominal_actions[i] = human.nominal_controller(self.human_positions[i], self.human_goals[i])
 
-        exec_actions = HumanIntegrator.apply_gmm_batch(
-            humans=self.humans,
-            nominal_actions=nominal_actions,
-            states=self.human_positions,
-            goals=self.human_goals,
-            radii=self.human_radii,
-        )
+        if self.human_use_gmm:
+            exec_actions = HumanIntegrator.apply_gmm_batch(
+                humans=self.humans,
+                nominal_actions=nominal_actions,
+                states=self.human_positions,
+                goals=self.human_goals,
+                radii=self.human_radii,
+            )
+        else:
+            exec_actions = np.asarray(nominal_actions, dtype=np.float32)
 
         # 3. human state update
         for i, human in enumerate(self.humans):
@@ -482,6 +488,37 @@ class SocialNav(gym.Env):
         smooth = x * x * (3.0 - 2.0 * x)  # smoothstep in [0, 1]
         return -float(self.safe_shaping_weight) * float(smooth)
 
+    def _normalize_obs(self, obs):
+        """
+        Scale observation features into roughly comparable ranges.
+        """
+        x = np.asarray(obs, dtype=np.float32).reshape(-1).copy()
+        if x.size == 0:
+            return x
+
+        k = int(self.max_obstacles_obs)
+        robot_v_scale = max(float(getattr(self.robot, "vmax", 1.0)), 1e-6)
+        human_v_scale = max(float(self.human_vmax), 1e-6)
+        rel_scale = max(float(self.sensing_radius), 1e-6)
+        goal_scale = max(float(self.arena_size), 1e-6)
+        radius_scale = max(float(self.human_radius_max), float(self.robot_radius), 1e-6)
+
+        # Robot block: [goal_rel_x, goal_rel_y, vx, vy, theta, radius]
+        x[0:2] /= goal_scale
+        x[2:4] /= robot_v_scale
+        x[4] /= np.pi
+        x[5] /= radius_scale
+
+        # Obstacle blocks: [rel_x, rel_y, vx, vy, radius, mask]
+        if x.size >= 6 + 6 * k:
+            blocks = x[6:6 + 6 * k].reshape(k, 6)
+            blocks[:, 0:2] /= rel_scale
+            blocks[:, 2:4] /= human_v_scale
+            blocks[:, 4] /= radius_scale
+            # mask stays 0/1
+
+        return np.clip(x, -5.0, 5.0)
+
     def _get_obs(self):
         # --- Robot state block ---
         goal_rel = self.robot_pos - self.goal_pos
@@ -510,8 +547,10 @@ class SocialNav(gym.Env):
                 obs_blocks[row, 4] = self.human_radii[idx]
                 obs_blocks[row, 5] = 1.0  # mask
 
-        obs = np.concatenate([robot_state, obs_blocks.reshape(-1)])
-        return obs.astype(np.float32)
+        obs = np.concatenate([robot_state, obs_blocks.reshape(-1)]).astype(np.float32)
+        if self.normalize_obs:
+            obs = self._normalize_obs(obs)
+        return obs
 
     def render(self):
         if self.render_mode is None:
