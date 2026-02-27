@@ -27,6 +27,7 @@ class Config:
         self.env.max_steps = 400
         self.env.sensing_radius = 5.0
         self.env.max_obstacles_obs = 1
+        self.env.normalize_obs = False
         # For pure RL + unicycle only:
         # when enabled, policy outputs [vx, vy], env.step converts to [v, omega].
         # self.env.rl_xy_to_unicycle = True
@@ -39,16 +40,14 @@ class Config:
         # self.human.radius = (0.3, 0.5)  # can be a single value or a range (min, max)
         self.human.radius = 0.3  # can be a single value or a range (min, max)
         # self.human.radius = 0.3
-        # self.human.vmax = 2.0
-        # self.human.vmax_min = 0.8
         self.human.vmax = (0.5, 1.5)
         self.human.arena_size = 6.0
-        self.human.policy = "orca"  # 'nominal', 'orca', 'social_force', or 'potential_field'
+        self.human.policy = "social_force"  # 'nominal', 'orca', 'social_force', or 'potential_field'
         self.human.num_humans = 20
         self.human.human_num_range = 0
         self.human.randomize_attributes = True
         # Whether to apply GMM perturbation to human actions in env.step.
-        self.human.use_gmm = False
+        self.human.use_gmm = True
         # Human goal changing behavior
         self.human.random_goal_changing = False
         self.human.goal_change_chance = 0.5

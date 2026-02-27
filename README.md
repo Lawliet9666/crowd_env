@@ -12,12 +12,6 @@ Run the environment test and save a visualization GIF:
 ```bash
 # Variable-number crowd (default)
 python test_env.py --env_name social_nav_var_num --steps 200 --obs_num 20
-
-# Fixed crowd
-python test_env.py --env_name social_nav --steps 200 --obs_num 10
-
-# Custom seed and output path
-python test_env.py --seed 42 --save_path trained_models/test.gif
 ```
 
 ### Arguments

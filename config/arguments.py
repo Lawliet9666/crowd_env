@@ -38,6 +38,8 @@ def get_args():
 	parser.add_argument('--lam', type=float, default=0.98, help='Lambda Parameter for GAE')
 	parser.add_argument('--num_minibatches', type=int, default=8)
 	parser.add_argument('--ent_coef', type=float, default=0.01, help='Entropy coefficient')
+	parser.add_argument('--disable_adv_norm', action='store_true', default=True, help='Disable advantage normalization')
+	parser.add_argument('--adv_norm_eps', type=float, default=1e-8, help='Epsilon for advantage normalization')
 	parser.add_argument('--target_kl', type=float, default=0.02, help='KL Divergence threshold')
 	parser.add_argument('--max_grad_norm', type=float, default=0.5)
 	parser.add_argument('--action_std_init', type=float, default=0.5, help='Initial action std')
