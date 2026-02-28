@@ -43,10 +43,8 @@ def get_args():
 	parser.add_argument('--target_kl', type=float, default=0.02, help='KL Divergence threshold')
 	parser.add_argument('--max_grad_norm', type=float, default=0.5)
 	parser.add_argument('--action_std_init', type=float, default=0.5, help='Initial action std')
-	parser.add_argument('--disable_ema', action='store_true', default=True, help='Disable EMA actor for eval/checkpoint')
-	parser.add_argument('--ema_decay', type=float, default=0.995, help='EMA decay for actor parameters')
 
-	parser.add_argument('--eval_freq_episodes', type=int, default=20, help='Frequency of evaluation in episodes')
+	parser.add_argument('--eval_freq_timesteps', type=int, default=200_000, help='Frequency of debug evaluation in timesteps (set <=0 to disable)')
 	parser.add_argument('--test_ep', type=int, default=100, help='Number of episodes for testing')
 	parser.add_argument('--test_viz_ep', type=int, default=50, help='Number of episodes to visualize (save gif) during testing')
 

@@ -15,6 +15,8 @@ class SocialNavVarNum(SocialNav):
 
         human_params = config_file.human_params if config_file is not None else {}
         self.human_num_range = int(human_params.get("human_num_range", 0))
+        # Matches initialization sampling below: px_noise/py_noise in [0, human_init_noise_range).
+        self.human_init_noise_range = float(human_params.get("init_noise_range", 1.0))
 
     def _init_robot_humans(self, options=None):
         rng = self.np_random
@@ -55,7 +57,7 @@ class SocialNavVarNum(SocialNav):
 
                 while True:
                     angle = rng.random() * np.pi * 2
-                    noise_range = 2.0
+                    noise_range = self.human_init_noise_range
                     px_noise = rng.uniform(0, 1) * noise_range
                     py_noise = rng.uniform(0, 1) * noise_range
                     hx = self.human_circle_radius * np.cos(angle) + px_noise
