@@ -77,6 +77,7 @@ class VecSAC(SAC):
         batch_rews = []
 
         obs, _ = self.env.reset()
+        obs = self._to_policy_obs(obs)
         ep_lens = np.zeros(self.num_envs, dtype=np.int32)
         ep_rets = np.zeros(self.num_envs, dtype=np.float32)
 
@@ -103,6 +104,7 @@ class VecSAC(SAC):
                     final_obs = self._extract_final_observation(infos, i)
                     if final_obs is not None:
                         transition_next_obs = final_obs
+                transition_next_obs = self._to_policy_obs(transition_next_obs)
 
                 self.replay_buffer.add(obs[i], actions[i], rews[i], transition_next_obs, float(dones[i]))
 
@@ -125,7 +127,7 @@ class VecSAC(SAC):
                     ep_lens[i] = 0
                     ep_rets[i] = 0.0
 
-            obs = next_obs
+            obs = self._to_policy_obs(next_obs)
             step_incr = self.num_envs
             env_steps_collected += step_incr
             self._env_steps_total += step_incr
