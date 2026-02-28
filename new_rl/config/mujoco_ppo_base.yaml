@@ -1,0 +1,6 @@
+defaults:
+  - base
+  - env: mujoco
+  - model: ppo_base
+  - trainer: ppo
+  - _self_

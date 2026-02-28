@@ -1,0 +1,9 @@
+env_id: "social_nav_var_num"
+type: "crowdsim"
+obs_dim: 12
+act_dim: 2
+
+success_reward: 20
+collision_penalty: -20
+potential_factor: 3.0
+constant_penalty: -0.025

@@ -1,0 +1,35 @@
+total_steps: 1000000  # total steps for rollout collection
+batch_size: 2048        # rollout size
+num_envs: 8             
+minibatch_size: 64
+update_epochs: 10
+
+gamma: 0.99
+gae_lambda: 0.95
+lr: 3.0e-4
+lr_min: 3.0e-5
+lr_schedule: "linear"   # linear decay | cosine decay | constant
+clip_coef: 0.2
+vf_coef: 0.5
+ent_coef: 0.0
+max_grad_norm: 0.5
+
+# action will always do scaling
+action_bound_method: "env_clip"   # model_clip | model_tanh | env_clip | env_tanh
+# model clip: NN last function is torch.clamp(-1, 1), then scale
+# model tanh: NN last function is torch.tanh(), then scale
+# env clip:  NN output a number y, then clip to [-1, 1], then scale. there will be no gradient through clipping.
+# env tanh:  NN output a number y, then tanh(y), then scale. there will be no gradient through tanh.
+
+
+# --- ppo tricks (do not change) ---
+use_obs_norm: true      # running obs normalization (MuJoCo standard)
+use_return_norm: true   # running return RMS normalization
+return_scale_only: true # divide by std only, otherwise divide by std and shift by mean
+use_adv_norm: true     # normalize advantages
+clip_vloss: true        # clip critic loss
+recompute_adv: true     # recompute GAE each epoch
+
+eval_interval: 10      
+eval_episodes: 10
+ckpt_interval: 10       

@@ -1,0 +1,4 @@
+env_id: "HalfCheetah-v4"
+type: "mujoco"
+obs_dim: 17
+act_dim: 6

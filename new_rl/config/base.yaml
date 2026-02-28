@@ -1,0 +1,8 @@
+seed: 0
+device: "cuda"
+
+
+wandb_entity: null
+wandb_project: null
+run_name: null
+save_dir: trained_models
