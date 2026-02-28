@@ -15,9 +15,9 @@ def get_args():
 			'rl', 'rlatt', 'rldeepsets', 
 			'rldeepsetscbfgamma', 'rldeepsetscvarbetaradius',
 			'rlcbfgamma', 'rlcvarbetaradius',
-			'orca', 'cbfqp', 'cvarqp', 'adapcvarqp', 'drcvarqp'
+			'orca', 'social_force', 'nominal', 'cbfqp', 'cvarqp', 'adapcvarqp', 'drcvarqp'
 		],
-		help='rl, rlatt, rldeepsets, rldeepsetscbfgamma, rldeepsetscvarbetaradius, rlcbfgamma, rlcvarbetaradius, orca, cbfqp, cvarqp, adapcvarqp, drcvarqp'
+		help='rl, rlatt, rldeepsets, rldeepsetscbfgamma, rldeepsetscvarbetaradius, rlcbfgamma, rlcvarbetaradius, orca, social_force, nominal, cbfqp, cvarqp, adapcvarqp, drcvarqp'
 	)
 	parser.add_argument(
 		'--test_mode',

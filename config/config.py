@@ -22,7 +22,7 @@ class Config:
     def __init__(self):
         # Environment Parameters
         self.env = BaseConfig()
-        self.env.name = "social_nav_var_num"
+        self.env.name = "social_nav_var_num" # social_nav_var_num social_nav
         self.env.dt = 0.1
         self.env.max_steps = 400
         self.env.sensing_radius = 5.0
@@ -45,6 +45,8 @@ class Config:
         self.human.policy = "social_force"  # 'nominal', 'orca', 'social_force', or 'potential_field'
         self.human.num_humans = 20
         self.human.human_num_range = 0
+        # Initial human spawn noise in SocialNavVarNum: px/py noise in [0, init_noise_range).
+        self.human.init_noise_range = 1.0
         self.human.randomize_attributes = True
         # Whether to apply GMM perturbation to human actions in env.step.
         self.human.use_gmm = True
@@ -82,6 +84,8 @@ class Config:
         self.robot.vmax = 1.0
         self.robot.amax = 2.0
         self.robot.omega_max = np.pi / 2
+        # Minimum initial robot-goal distance in SocialNavVarNum.
+        self.robot.ini_goal_dist = 6.0 # influences initial sampling of robot and goal positions to ensure they are not too close
         self.robot.type = "unicycle"  # 'single_integrator', 'unicycle', 'unicycle_dynamic'
 
         # Optimization controller parameters
