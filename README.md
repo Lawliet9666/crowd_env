@@ -34,6 +34,14 @@ All parameters are defined in [config/config.py](config/config.py):
 - **`config.reward`** — success/collision rewards, discomfort penalty
 - **`config.controller`** — CBF parameters (`cbf_alpha`, `cvar_beta`, `safety_margin`)
 
+Note:
+ - config.human.num_humans = human_num  # Test with multiple humans to verify dynamics and rendering
+ - config.env.max_obstacles_obs = 5  # how many humans are included in the observation  
+ - config.robot.vmax = 1.0  # Set robot max speed to a reasonable value for testing
+ - config.robot.radius = 0.3  # Set robot radius to a reasonable value for testing
+ - config.robot.wmax = np.pi / 2  # Set max angular velocity for unicycle (if applicable)
+ - config.robot.ini_goal_dist = 6.0  #  initial robot-goal distance  
+
 ## Robot Types
 
 | Type | Action Space | Description |

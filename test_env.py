@@ -25,6 +25,7 @@ def run_env_test(
     config.robot.vmax = 1.0  # Set robot max speed to a reasonable value for testing
     config.robot.radius = 0.3  # Set robot radius to a reasonable value for testing
     config.robot.wmax = np.pi / 2  # Set max angular velocity for unicycle (if applicable)
+    config.robot.ini_goal_dist = 6.0  #  initial robot-goal distance  
     # config.reward
     
     if human_policy is not None:
