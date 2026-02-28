@@ -17,6 +17,7 @@ import torch.nn as nn
 from torch.optim import Adam
 from torch.distributions import Normal, Independent
 from rl.network import FCNet
+from crowd_sim.utils import absolute_obs_batch_to_relative, relative_obs_dim_from_env_dim
 # from rl.network_deepsets import DeepSetsPolicy, DeepSetsValueNet
 
 class PPO:
@@ -39,19 +40,20 @@ class PPO:
         self._init_hyperparameters(hyperparameters)
 
         # New: Evaluation Env and Debug Mode
-        self.last_eval_episode_count = 0
+        self.last_eval_timestep = 0
         self.best_success_rate = -1.0
 
         # Extract environment information
         self.env = env
         if hasattr(env, 'single_observation_space'):
-            self.obs_dim = env.single_observation_space.shape[0]
+            env_obs_dim = int(env.single_observation_space.shape[0])
             self.act_dim = env.single_action_space.shape[0]
             act_space = env.single_action_space
         else:
-            self.obs_dim = env.observation_space.shape[0]
+            env_obs_dim = int(env.observation_space.shape[0])
             self.act_dim = env.action_space.shape[0]
             act_space = env.action_space
+        self.obs_dim = relative_obs_dim_from_env_dim(env_obs_dim)
 
         # Squashed Gaussian action mapping:
         # z ~ N(mu, sigma), u=tanh(z) in [-1, 1], a=bias+scale*u in [low, high]
@@ -76,7 +78,7 @@ class PPO:
         # if issubclass(policy_class, DeepSetsPolicy):
         #     self.critic = DeepSetsValueNet(self.obs_dim, 1).to(self.device)
         # else:
-        self.critic = FCNet(self.obs_dim, 1, **actor_kwargs).to(self.device)
+        self.critic = FCNet(self.obs_dim, 1).to(self.device)
 
         # Learnable log std for action distribution (keeps QP differentiable)
         init_std = self.action_std_init
@@ -121,26 +123,22 @@ class PPO:
         """
         print(f"Learning... Running {self.max_timesteps_per_episode} timesteps per episode, ", end='')
         print(f"{self.timesteps_per_batch} timesteps per batch for a total of {total_timesteps} timesteps")
-        next_timestep_save = self._next_save_step()
+        next_timestep_save = None
+        if self.save_freq > 0:
+            next_timestep_save = self.save_after_timesteps if self.save_after_timesteps > 0 else self.save_freq
         t_so_far = 0 # Timesteps simulated so far
         i_so_far = 0 # Iterations ran so far
-        episodes_so_far = 0
         while t_so_far < total_timesteps:                                                                       # ALG STEP 2
             # Autobots, roll out (just kidding, we're collecting our batch simulations here)
             batch_obs, batch_acts, batch_log_probs, batch_rews, batch_lens, batch_vals, batch_dones = self.rollout()                     # ALG STEP 3
-            
-            episodes_so_far += len(batch_lens)
-            
-            # Evaluate by episode cadence when enabled.
-            should_eval = (
-                hasattr(self, "eval_env")
-                and self.eval_env is not None
-                and int(self.eval_freq_episodes) > 0
-                and int(self.eval_episodes) > 0
-            )
-            if should_eval and (episodes_so_far - self.last_eval_episode_count) >= int(self.eval_freq_episodes):
-                self._evaluate_policy_internal(K=int(self.eval_episodes), step=t_so_far)
-                self.last_eval_episode_count = episodes_so_far
+            batch_steps = int(np.sum(batch_lens))
+            t_so_far += batch_steps
+
+            # --- EVALUATION BLOCK ---
+            if self.eval_freq_timesteps > 0 and (t_so_far - self.last_eval_timestep) >= self.eval_freq_timesteps:
+                self.evaluate_policy_internal(K= max(1, self.eval_episodes), step=t_so_far)
+                self.last_eval_timestep = t_so_far
+            # ------------------------
 
             # --- Log Min Barrier (Worst Case Safety) ---
             # We compute this outside the main training loop to avoid slowing down backprop.
@@ -160,9 +158,6 @@ class PPO:
             V = self.critic(batch_obs).squeeze()
             batch_rtgs = A_k + V.detach()   
             
-            # Calculate how many timesteps we collected this batch
-            t_so_far += np.sum(batch_lens)
-
             # Increment the number of iterations
             i_so_far += 1
 
@@ -170,7 +165,7 @@ class PPO:
             while next_timestep_save is not None and t_so_far >= next_timestep_save:
                 self._save_model_files(suffix=f"step_{int(next_timestep_save)}")
                 print(f"Saved timestep checkpoint at {int(next_timestep_save)} steps.", flush=True)
-                next_timestep_save += int(self.save_freq)
+                next_timestep_save += self.save_freq
 
             # Logging timesteps so far and iterations so far
             self.logger['t_so_far'] = t_so_far
@@ -330,15 +325,9 @@ class PPO:
             # Print a summary of our training so far
             self._log_summary()
 
-        # Always write final checkpoints at training end.
-        self._save_model_files()
-        print(f"Saved final checkpoint at {int(t_so_far)} steps.", flush=True)
 
-
-    def _evaluate_policy_internal(self, K, step):
-        if not hasattr(self, "eval_env") or self.eval_env is None or K <= 0:
-            return
-        print(f"EVAL: Evaluating policy at step {step}...", flush=True)
+    def evaluate_policy_internal(self, K, step): # TODO: multiple seeds evlauation
+        print(f"DEBUG: Evaluating policy at step {step}...", flush=True)
         ret_list = []
         len_list = []
         success_count = 0
@@ -357,7 +346,8 @@ class PPO:
             
             while not done:
                 with torch.no_grad():
-                    obs_tensor = torch.tensor(obs, dtype=torch.float).to(self.device).unsqueeze(0) # Add batch dim
+                    obs_rel = absolute_obs_batch_to_relative(obs)
+                    obs_tensor = torch.tensor(obs_rel, dtype=torch.float).to(self.device).unsqueeze(0) # Add batch dim
                     # Use mean action directly (deterministic)
                     if hasattr(self, 'actor'):
                         action_tensor, _ = self._squash_action(self.actor(obs_tensor))
@@ -397,7 +387,7 @@ class PPO:
         success_rate = success_count / K
         collision_rate = collision_count / K
         
-        print(f"EVAL: Returns {avg_ret:.2f}+/-{std_ret:.2f}, Success {success_rate:.2f}", flush=True)
+        print(f"DEBUG: Eval Result - Returns: {avg_ret:.2f}+/-{std_ret:.2f}, Success: {success_rate:.2f}")
         
         # Log to wandb if initialized
         if wandb.run is not None:
@@ -503,12 +493,13 @@ class PPO:
                 t += 1 # Increment timesteps ran this batch so far
 
                 # Track observations in this batch
-                batch_obs.append(obs)
+                obs_rel = absolute_obs_batch_to_relative(obs)
+                batch_obs.append(obs_rel)
 
                 # Calculate action and make a step in the env. 
                 # Note that rew is short for reward.
                 action, log_prob = self.get_action(obs)
-                obs_tensor = torch.tensor(obs, dtype=torch.float).to(self.device)
+                obs_tensor = torch.tensor(obs_rel, dtype=torch.float).to(self.device)
                 val = self.critic(obs_tensor)
 
                 obs, rew, terminated, truncated, infos = self.env.step(action)
@@ -561,7 +552,8 @@ class PPO:
                 log_prob - the log probability of the selected action in the distribution
         """
         # Query the actor network for a mean action
-        obs = torch.tensor(obs, dtype=torch.float).to(self.device)
+        obs_rel = absolute_obs_batch_to_relative(obs)
+        obs = torch.tensor(obs_rel, dtype=torch.float).to(self.device)
         mean = self.actor(obs)  # latent mean (unbounded)
         dist = self._build_action_dist(mean)
 
@@ -648,14 +640,6 @@ class PPO:
         torch.save(self.actor.state_dict(), actor_path)
         torch.save(self.critic.state_dict(), critic_path)
 
-    def _next_save_step(self):
-        if int(self.save_freq) <= 0:
-            return None
-        if int(self.save_after_timesteps) <= 0:
-            return int(self.save_freq)
-        k = max(1, (int(self.save_after_timesteps) + int(self.save_freq) - 1) // int(self.save_freq))
-        return k * int(self.save_freq)
-
     def _init_hyperparameters(self, hyperparameters):
         # Initialize default values for hyperparameters
         # Algorithm hyperparameters
@@ -674,9 +658,8 @@ class PPO:
         self.action_std_init = 0.5                       # Initial action std (learnable)
         self.save_after_timesteps = 0                    # First timestep to save checkpoint (0 means disabled)
         self.save_freq = 0                  # Checkpoint interval in timesteps (0 means disabled)
-        self.eval_freq_episodes = 0                      # Eval disabled by default unless explicitly configured
-        self.eval_episodes = 20                          # Eval episodes per eval trigger
-        self.eval_env = None                             # Optional evaluation environment
+        self.eval_freq_timesteps = 200000                # Eval cadence in timesteps
+        self.eval_episodes = 50                          # Episodes per periodic evaluation
 
         # Miscellaneous parameters
         self.render = False                             # If we should render during rollout

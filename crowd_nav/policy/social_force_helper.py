@@ -1,5 +1,6 @@
 import numpy as np
 from crowd_nav.policy.social_force import SOCIAL_FORCE
+from crowd_sim.utils import absolute_obs_to_relative
 
 class SFAgentState:
     __slots__ = ("px", "py", "gx", "gy", "vx", "vy", "radius", "v_pref")
@@ -280,7 +281,7 @@ class SocialForceController:
         print(f"[SocialForceController] robot_type={self.robot_type}", flush=True)
 
     def _parse_observation(self, obs):
-        obs = np.asarray(obs, dtype=float).reshape(-1)
+        obs = absolute_obs_to_relative(obs).astype(float, copy=False).reshape(-1)
 
         goal_rel = obs[0:2]      # robot_pos - goal_pos
         robot_vel = obs[2:4]     # world-frame velocity

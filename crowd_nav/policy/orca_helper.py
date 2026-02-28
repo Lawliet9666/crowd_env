@@ -1,6 +1,7 @@
 import numpy as np
 import rvo2
 from crowd_nav.policy.orca import ORCA
+from crowd_sim.utils import absolute_obs_to_relative
 
 
 class OrcaAgentState:
@@ -275,7 +276,7 @@ class ORCAController:
         print(f"[ORCAController] robot_type={self.robot_type}", flush=True)
 
     def _parse_observation(self, obs):
-        obs = np.asarray(obs, dtype=float).reshape(-1)
+        obs = absolute_obs_to_relative(obs).astype(float, copy=False).reshape(-1)
 
         goal_rel = obs[0:2]      # robot_pos - goal_pos
         robot_vel = obs[2:4]     # world-frame velocity

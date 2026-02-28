@@ -18,6 +18,7 @@ import torch
 from config.config import Config
 from crowd_sim.env.social_nav import SocialNav
 from crowd_sim.env.social_nav_var_num import SocialNavVarNum
+from crowd_sim.utils import absolute_obs_to_relative, relative_obs_dim_from_env_dim
 from eval_policy import RLEvalActorAdapter
 from crowd_nav.policy_utils import get_policy_class
 
@@ -96,16 +97,22 @@ def discover_checkpoints(run_dir: str) -> List[Dict[str, Any]]:
 
 
 def _to_action(actor, obs):
+    obs_rel = absolute_obs_to_relative(obs)
+
     if hasattr(actor, "deterministic"):
         actor.deterministic = True
 
     if hasattr(actor, "get_action"):
-        out = actor.get_action(obs)
+        out = actor.get_action(obs_rel)
     elif isinstance(actor, torch.nn.Module):
         with torch.no_grad():
-            out = actor(obs)
+            dev = next(actor.parameters()).device
+            obs_t = torch.as_tensor(obs_rel, dtype=torch.float32, device=dev).unsqueeze(0)
+            out = actor(obs_t)
+            if torch.is_tensor(out) and out.ndim >= 2:
+                out = out[0]
     else:
-        out = actor(obs)
+        out = actor(obs_rel)
 
     action = out[0] if isinstance(out, (tuple, list)) else out
     if torch.is_tensor(action):
@@ -313,7 +320,7 @@ def main():
     env = build_env(env_name, cfg)
 
     PolicyClass = get_policy_class(method)
-    obs_dim = env.observation_space.shape[0]
+    obs_dim = relative_obs_dim_from_env_dim(env.observation_space.shape[0])
     act_dim = env.action_space.shape[0]
     policy_kwargs = _policy_kwargs_from_config(cfg)
 

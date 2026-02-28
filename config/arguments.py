@@ -20,10 +20,10 @@ def get_args():
 			'rl', 'rlatt', 'rldeepsets', 
 			'rldeepsetscbfgamma', 'rldeepsetscvarbetaradius',
 			'rlcbfgamma', 'rlcvarbetaradius',
-			'orca', 'cbfqp', 'cvarqp', 'adapcvarqp', 'drcvarqp'
+			'orca', 'social_force', 'nominal', 'cbfqp', 'cvarqp', 'adapcvarqp', 'drcvarqp'
 		],
-			help='rl, rlatt, rldeepsets, rldeepsetscbfgamma, rldeepsetscvarbetaradius, rlcbfgamma, rlcvarbetaradius, orca, cbfqp, cvarqp, adapcvarqp, drcvarqp'
-		)
+		help='rl, rlatt, rldeepsets, rldeepsetscbfgamma, rldeepsetscvarbetaradius, rlcbfgamma, rlcvarbetaradius, orca, social_force, nominal, cbfqp, cvarqp, adapcvarqp, drcvarqp'
+	)
 
 	# -------------------------------------------------------------------------
 	# COMMON optimization/logging arguments (shared by SAC and PPO)
@@ -65,7 +65,7 @@ def get_args():
 	parser.add_argument('--ppo_target_kl', type=float, default=0.02)
 	parser.add_argument('--ppo_max_grad_norm', type=float, default=0.5, help='Gradient clipping norm for PPO')
 	parser.add_argument('--ppo_action_std_init', type=float, default=0.5)
-	parser.add_argument('--ppo_eval_freq_episodes', type=int, default=50, help='Run PPO evaluation every N completed training episodes (0 disables)')
+	parser.add_argument('--ppo_eval_freq_timesteps', type=int, default=50, help='Run PPO evaluation every N completed training episodes (0 disables)')
 	parser.add_argument('--ppo_eval_episodes', type=int, default=20, help='Number of episodes per PPO evaluation run')
 
 	# -------------------------------------------------------------------------

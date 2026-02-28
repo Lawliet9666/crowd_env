@@ -233,11 +233,11 @@ python eval.py \
 - `--ppo_target_kl`
 - `--ppo_max_grad_norm`
 - `--ppo_action_std_init`
-- `--ppo_eval_freq_episodes`, `--ppo_eval_episodes`
+- `--ppo_eval_freq_timesteps`, `--ppo_eval_episodes`
 
 Evaluation in training can be disabled by setting frequency to `0`:
 - SAC: `--sac_eval_freq_episodes 0`
-- PPO: `--ppo_eval_freq_episodes 0`
+- PPO: `--ppo_eval_freq_timesteps 0`
 
 ## Checkpoints and Output Folder
 
