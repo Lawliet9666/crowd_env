@@ -166,7 +166,7 @@ class Trainer:
             
             def make_env_fn(config: CrowdSimConfig, env_name: str, seed_offset: int = 0):
                 def _init():
-                    env = build_env(env_name, render_mode=None, config=config)
+                    env = build_env(env_name, render_mode=None, config=config, topk=self.config.env.topk, farest_dist=self.config.env.farest_dist)
                     env = gym.wrappers.RecordEpisodeStatistics(env)
                     env.reset(seed=self.config.seed + seed_offset)
                     return env

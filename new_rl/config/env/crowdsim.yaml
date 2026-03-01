@@ -1,6 +1,10 @@
 env_id: "social_nav_var_num_ploar"
 type: "crowdsim"
-obs_dim: 23
+
+topk: 5
+farest_dist: 5
+
+obs_dim: ${math:3+${env.topk}*4} # robot + topk humans
 act_dim: 2
 
 success_reward: 20

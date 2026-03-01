@@ -5,7 +5,11 @@ WANDB_API_KEY=xxx python scripts/run_mujoco_ppo_base.py run_name=testest wandb_e
 import hydra
 import os
 
+from omegaconf import OmegaConf
 from new_rl.trainer.ppo_base_trainer import PPOBaseTrainer
+
+# Register resolver for arithmetic in config (e.g. obs_dim: ${math:3+${env.topk}*5})
+OmegaConf.register_new_resolver("math", lambda expr: eval(str(expr)), replace=True)
 
 main_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

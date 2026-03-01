@@ -8,7 +8,7 @@ pip install -e .
 
 ## train
 ```
-WANDB_API_KEY=xxx  python scripts/run_crowdsim_ppo_base.py run_name=xxx wandb_entity=xxx wandb_project=xxx trainer.total_steps=10000000 trainer.batch_size=8196 trainer.minibatch_size=256
+WANDB_API_KEY=xxx  python scripts/run_crowdsim_ppo_base.py run_name=xxx wandb_entity=xxx wandb_project=xxx trainer.total_steps=10000000 trainer.batch_size=8192 trainer.minibatch_size=256
 ```
 Best practice:  Use large batch_size (rollout) and minibatch_size
 
@@ -16,11 +16,11 @@ Best practice:  Use large batch_size (rollout) and minibatch_size
 |:-:|:-:|:-:|:-:|
 | 10M | 2048 | 64 | 58%  |  
 | 10M | 4096 | 64 | 61%  |
-| 10M | 8196 | 256 | 64% |
+| 10M | 8192 | 256 | 64% |
 | 20M | 4096 | 64 | - |
-| 20M | 8196 | 256 | - |
+| 20M | 8192 | 256 | - |
 | 50M | 4096 | 64 | -  |
-| 50M | 8196 | 256 | - |
+| 50M | 8192 | 256 | - |
 
 
 ## test
