@@ -215,7 +215,7 @@ class Trainer:
         raise NotImplementedError("Training is not implemented yet")
     
     
-    def eval(self, episodes: int = 20, seed: int = 1000):
+    def eval(self, episodes: int = 10):
         """Evaluate policy deterministically (mean action) in a single env."""
         self.model.eval()
         env = self.make_env_fn(self.crowd_sim_config, self.config.env.env_id)()
@@ -223,39 +223,41 @@ class Trainer:
         success_count = 0
         collision_count = 0
         timeout_count = 0
-        for ep in range(episodes):
-            obs_np, _ = env.reset(seed=seed + ep)
-            done = False
-            total = 0.0
-            while not done:
-                if self.obs_normalizer is not None:
-                    obs_norm = self.obs_normalizer.normalize(obs_np)
-                    if isinstance(obs_norm, torch.Tensor):
-                        obs_t = obs_norm.float().to(self.device).unsqueeze(0)
+        for seed in [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]:
+            for ep in range(episodes):
+                obs_np, _ = env.reset(seed=seed + ep)
+                done = False
+                total = 0.0
+                while not done:
+                    if self.obs_normalizer is not None:
+                        obs_norm = self.obs_normalizer.normalize(obs_np)
+                        if isinstance(obs_norm, torch.Tensor):
+                            obs_t = obs_norm.float().to(self.device).unsqueeze(0)
+                        else:
+                            obs_t = torch.tensor(obs_norm, dtype=torch.float32, device=self.device).unsqueeze(0)
                     else:
-                        obs_t = torch.tensor(obs_norm, dtype=torch.float32, device=self.device).unsqueeze(0)
-                else:
-                    obs_t = torch.tensor(obs_np, dtype=torch.float32, device=self.device).unsqueeze(0)
+                        obs_t = torch.tensor(obs_np, dtype=torch.float32, device=self.device).unsqueeze(0)
 
-                with torch.no_grad():
-                    action = self.model.actor.net(obs_t).squeeze(0)  # deterministic (mean)
+                    with torch.no_grad():
+                        action = self.model.actor.net(obs_t).squeeze(0)  # deterministic (mean)
 
-                action_np = map_action_to_env(
-                    action.cpu().numpy(),
-                    self.action_low,
-                    self.action_high,
-                    self.config.trainer.action_bound_method,
-                )
+                    action_np = map_action_to_env(
+                        action.cpu().numpy(),
+                        self.action_low,
+                        self.action_high,
+                        self.config.trainer.action_bound_method,
+                    )
 
-                obs_np, r, term, trunc, info = env.step(action_np)
-                done = term or trunc
-                total += float(r)
-            returns.append(total)
-            success_count += int(info.get("is_success", False))
-            collision_count += int(info.get("is_collision", False))
-            timeout_count += int(info.get("is_timeout", False))
+                    obs_np, r, term, trunc, info = env.step(action_np)
+                    done = term or trunc
+                    total += float(r)
+                returns.append(total)
+                success_count += int(info.get("is_success", False))
+                collision_count += int(info.get("is_collision", False))
+                timeout_count += int(info.get("is_timeout", False))
         env.close()
-        return float(np.mean(returns)), float(np.std(returns)), success_count/episodes, collision_count/episodes, timeout_count/episodes
+        total_count = success_count + collision_count + timeout_count
+        return float(np.mean(returns)), float(np.std(returns)), success_count/total_count, collision_count/total_count, timeout_count/total_count
 
     
     def save_ckpt(self, save_dir: str, step: int, performance: float, max_keep: int = 10):

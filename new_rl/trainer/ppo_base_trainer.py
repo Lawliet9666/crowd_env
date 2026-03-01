@@ -374,7 +374,7 @@ class PPOBaseTrainer(Trainer):
 
             do_eval = update % self.config.trainer.eval_interval == 0 or update == 1 or update == self.num_updates
             if do_eval:
-                eval_mean, eval_std, success_rate, collision_rate, timeout_rate = self.eval(episodes=self.config.trainer.eval_episodes)
+                eval_mean, eval_std, success_rate, collision_rate, timeout_rate = self.eval()
                 print(
                     f"update {update:4d}/{self.num_updates} | steps {global_step:8d} | "
                     f"eval {eval_mean:8.2f}±{eval_std:5.2f} | "

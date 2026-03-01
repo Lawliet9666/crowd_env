@@ -3,3 +3,8 @@ WANDB_API_KEY=09a0ff7ac975ebe7e916d51cd6d6b73c60f63ef1  python scripts/run_mujoc
 
 WANDB_API_KEY=09a0ff7ac975ebe7e916d51cd6d6b73c60f63ef1  python scripts/run_crowdsim_ppo_base.py run_name=crowdsim-10m wandb_entity=daiyp_umich wandb_project=crowdsim_ppo  trainer.total_steps=10000000 trainer.eval_interval=100 trainer.ent_coef=0.02
 
+
+
+
+
+WANDB_API_KEY=09a0ff7ac975ebe7e916d51cd6d6b73c60f63ef1  python scripts/run_crowdsim_ppo_base.py run_name=testest trainer.use_cirriculum=True

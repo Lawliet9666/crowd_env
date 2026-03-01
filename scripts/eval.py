@@ -135,6 +135,52 @@ class Evaluator:
         with open(os.path.join(self.save_dir, "eval_results.json"), "w") as f:
             json.dump(results, f, indent=4)
         return results
+    
+    # def small_test(self, episodes: int = 20, seed: int = 1000):
+    #     """Evaluate policy deterministically (mean action) in a single env."""
+    #     self.model.eval()
+    #     env = self.make_env_fn()()
+    #     action_space = env.action_space
+    #     action_low = np.asarray(action_space.low, dtype=np.float32)
+    #     action_high = np.asarray(action_space.high, dtype=np.float32)
+    #     returns = []
+    #     success_count = 0
+    #     collision_count = 0
+    #     timeout_count = 0
+    #     for ep in range(episodes):
+    #         obs_np, _ = env.reset(seed=seed + ep)
+    #         done = False
+    #         total = 0.0
+    #         while not done:
+    #             if self.obs_normalizer is not None:
+    #                 obs_norm = self.obs_normalizer.normalize(obs_np)
+    #                 if isinstance(obs_norm, torch.Tensor):
+    #                     obs_t = obs_norm.float().to(self.device).unsqueeze(0)
+    #                 else:
+    #                     obs_t = torch.tensor(obs_norm, dtype=torch.float32, device=self.device).unsqueeze(0)
+    #             else:
+    #                 obs_t = torch.tensor(obs_np, dtype=torch.float32, device=self.device).unsqueeze(0)
+
+    #             with torch.no_grad():
+    #                 action = self.model.actor.net(obs_t).squeeze(0)  # deterministic (mean)
+
+    #             action_np = map_action_to_env(
+    #                 action.cpu().numpy(),
+    #                 action_low,
+    #                 action_high,
+    #                 self.config.trainer.action_bound_method,
+    #             )
+
+    #             obs_np, r, term, trunc, info = env.step(action_np)
+    #             done = term or trunc
+    #             total += float(r)
+    #         returns.append(total)
+    #         success_count += int(info.get("is_success", False))
+    #         collision_count += int(info.get("is_collision", False))
+    #         timeout_count += int(info.get("is_timeout", False))
+    #     env.close()
+    #     return float(np.mean(returns)), float(np.std(returns)), success_count/episodes, collision_count/episodes, timeout_count/episodes
+    
  
     def evaluate(self):
         """Evaluate policy deterministically (mean action) in a single env."""
