@@ -18,7 +18,15 @@ def run_env_test(
     human_num=20,
 ):
     config = Config()
+
+    # parameter overrides for testing
     config.human.num_humans = human_num  # Test with multiple humans to verify dynamics and rendering
+    config.env.max_obstacles_obs = 5  # how many humans are included in the observation  
+    config.robot.vmax = 1.0  # Set robot max speed to a reasonable value for testing
+    config.robot.radius = 0.3  # Set robot radius to a reasonable value for testing
+    config.robot.wmax = np.pi / 2  # Set max angular velocity for unicycle (if applicable)
+    # config.reward
+    
     if human_policy is not None:
         config.human.policy = human_policy
     render_mode = "rgb_array"

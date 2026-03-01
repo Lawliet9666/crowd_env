@@ -9,6 +9,7 @@ import imageio
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+from crowd_sim.utils import absolute_obs_to_relative
 
 
 class RLEvalActorAdapter:
@@ -37,6 +38,7 @@ class RLEvalActorAdapter:
         return getattr(self.actor, name)
 
 def _compute_action(actor, obs):
+    obs = absolute_obs_to_relative(obs)
     if hasattr(actor, "deterministic"):
         actor.deterministic = True
     out = actor.get_action(obs)

@@ -59,32 +59,56 @@ python test_env.py --env_name social_nav_var_num --steps 200 --obs_num 20
 
 ## Observation Format
 
-Observation is a 1D vector with shape:
+### A) Environment Output (`env.reset()` / `env.step()`)
+
+Env returns **absolute-format** observation:
 
 ```text
-obs_dim = 6 + 6 * K
+obs_env_dim = 8 + 6 * K
 K = config.env["max_obstacles_obs"]
 ```
 
-Robot block (`obs[0:6]`):
+Robot+goal block (`obs[0:8]`):
 
 ```text
-[goal_rel_x, goal_rel_y, vx, vy, theta, robot_radius]
+[rx, ry, gx, gy, rvx, rvy, rtheta, r_radius]
 ```
 
-Obstacle blocks (`K` slots, each 6 dims):
+Obstacle blocks (`K` slots, each 6 dims, `obs[8:]`):
 
 ```text
-[rel_x, rel_y, human_vx, human_vy, human_radius, mask]
+[hx, hy, hvx, hvy, h_radius, mask]
 ```
 
-Details:
-- `rel_*` is defined as `robot_pos - human_pos`.
-- Only visible humans (`distance <= sensing_radius`) are considered.
-- The nearest `K` visible humans are packed into slots.
-- Unused slots are zero-padded, and `mask=0`.
-- Valid slots have `mask=1`.
+Notes:
+- Only visible humans (`distance <= sensing_radius`) are packed.
+- Nearest visible humans are selected up to `K`.
+- Empty slots are zero-padded with `mask=0`; valid slots use `mask=1`.
+<!-- - If `config.env["normalize_obs"]=True`, values are normalized but layout stays the same. -->
 
+### B) Network Input (what policy actually sees)
+
+#### PPO / VecPPO / SAC / VecSAC  input
+PPO converts env absolute obs to **relative-format** before actor/critic:
+
+```text
+obs_net_dim = 6 + 6 * K
+```
+
+Robot block:
+
+```text
+[goal_rel_x, goal_rel_y, rvx, rvy, rtheta, r_radius]
+goal_rel = [rx - gx, ry - gy]
+```
+
+Obstacle block:
+
+```text
+[rel_x, rel_y, hvx, hvy, h_radius, mask]
+rel = [rx - hx, ry - hy]
+```
+ 
 
 ## Training and Evaluation
 
@@ -233,11 +257,11 @@ python eval.py \
 - `--ppo_target_kl`
 - `--ppo_max_grad_norm`
 - `--ppo_action_std_init`
-- `--ppo_eval_freq_episodes`, `--ppo_eval_episodes`
+- `--ppo_eval_freq_timesteps`, `--ppo_eval_episodes`
 
 Evaluation in training can be disabled by setting frequency to `0`:
 - SAC: `--sac_eval_freq_episodes 0`
-- PPO: `--ppo_eval_freq_episodes 0`
+- PPO: `--ppo_eval_freq_timesteps 0`
 
 ## Checkpoints and Output Folder
 

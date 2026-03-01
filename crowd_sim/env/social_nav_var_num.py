@@ -14,7 +14,11 @@ class SocialNavVarNum(SocialNav):
         super().__init__(render_mode=render_mode, config_file=config_file)
 
         human_params = config_file.human_params if config_file is not None else {}
+        robot_params = config_file.robot_params if config_file is not None else {}
         self.human_num_range = int(human_params.get("human_num_range", 0))
+        # Matches initialization sampling below: px_noise/py_noise in [0, human_init_noise_range).
+        self.human_init_noise_range = float(human_params.get("init_noise_range", 1.0))
+        self.robot_ini_goal_dist = float(robot_params.get("ini_goal_dist", 4.0))
 
     def _init_robot_humans(self, options=None):
         rng = self.np_random
@@ -30,13 +34,13 @@ class SocialNavVarNum(SocialNav):
                 py = self.arena_size * np.sin(angle)
                 while True:
                     gx, gy = rng.uniform(-self.arena_size, self.arena_size, 2)
-                    if np.linalg.norm([px - gx, py - gy]) >= 4: # TODO: previous 4
+                    if np.linalg.norm([px - gx, py - gy]) >= self.robot_ini_goal_dist: # TODO: previous 4
                         break
                 theta = rng.uniform(0, 2 * np.pi)
             else:
                 while True:
                     px, py, gx, gy = rng.uniform(-self.arena_size, self.arena_size, 4)
-                    if np.linalg.norm([px - gx, py - gy]) >= 8:
+                    if np.linalg.norm([px - gx, py - gy]) >= self.robot_ini_goal_dist:
                         break
                 theta = np.pi / 2
 
@@ -55,7 +59,7 @@ class SocialNavVarNum(SocialNav):
 
                 while True:
                     angle = rng.random() * np.pi * 2
-                    noise_range = 2.0
+                    noise_range = self.human_init_noise_range
                     px_noise = rng.uniform(0, 1) * noise_range
                     py_noise = rng.uniform(0, 1) * noise_range
                     hx = self.human_circle_radius * np.cos(angle) + px_noise

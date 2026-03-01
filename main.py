@@ -13,8 +13,8 @@ import wandb
 
 from config.arguments import get_args
 from config.config import Config
-from crowd_sim.utils import build_env
-from eval_policy_v2 import RLEvalActorAdapter, eval_policy
+from crowd_sim.utils import build_env, relative_obs_dim_from_env_dim
+from eval_policy import RLEvalActorAdapter, eval_policy
 from rl.network import FCNet
 from rl.ppo_optimized import PPO
 from rl.sac import SAC
@@ -99,7 +99,7 @@ def build_ppo_hyperparameters(args, base_hyperparameters, config):
             "target_kl": args.ppo_target_kl,
             "max_grad_norm": args.ppo_max_grad_norm,
             "action_std_init": args.ppo_action_std_init,
-            "eval_freq_episodes": args.ppo_eval_freq_episodes,
+            "eval_freq_timesteps": args.ppo_eval_freq_timesteps,
             "eval_episodes": args.ppo_eval_episodes,
             "alpha": config.controller_params["cbf_alpha"],
             "beta": config.controller_params["cvar_beta"],
@@ -152,7 +152,8 @@ def test(env, actor_model, device, test_episodes=50, base_seed=None):
         print("Didn't specify model file. Exiting.", flush=True)
         sys.exit(0)
 
-    obs_dim = env.observation_space.shape[0]
+    env_obs_dim = int(env.observation_space.shape[0])
+    obs_dim = relative_obs_dim_from_env_dim(env_obs_dim)
     act_dim = env.action_space.shape[0]
 
     policy = FCNet(obs_dim, act_dim).to(device)
@@ -227,7 +228,7 @@ def main(args):
         if args.algo == "sac" and args.sac_eval_freq_episodes > 0 and args.sac_eval_episodes > 0:
             eval_env = build_env(env_name, render_mode=None, config=config)
             model_hyperparameters["eval_env"] = eval_env
-        if args.algo == "ppo" and args.ppo_eval_freq_episodes > 0 and args.ppo_eval_episodes > 0:
+        if args.algo == "ppo" and args.ppo_eval_freq_timesteps > 0 and args.ppo_eval_episodes > 0:
             eval_env = build_env(env_name, render_mode=None, config=config)
             model_hyperparameters["eval_env"] = eval_env
 

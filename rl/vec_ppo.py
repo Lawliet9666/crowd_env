@@ -2,6 +2,7 @@ import torch
 import numpy as np
 # from rl.ppo import PPO
 from rl.ppo_optimized import PPO
+from crowd_sim.utils import absolute_obs_batch_to_relative
 
 class VecPPO(PPO):
     def __init__(self, policy_class, env, num_envs, **hyperparameters):
@@ -33,6 +34,7 @@ class VecPPO(PPO):
 
         # Reset all environments
         obs, _ = self.env.reset()
+        obs = absolute_obs_batch_to_relative(obs)
         
         t_so_far = 0
         
@@ -44,6 +46,7 @@ class VecPPO(PPO):
             
             # Step the vectorized environment
             next_obs, rews, terminations, truncations, infos = self.env.step(actions)
+            next_obs = absolute_obs_batch_to_relative(next_obs)
             
             dones = terminations | truncations
 

@@ -112,11 +112,11 @@ class SocialNav(gym.Env):
                 max_humans=self.num_humans,
             )
 
-        # --- Base Observation ---
-        # Robot state block: [goal_rel_x, goal_rel_y, vx, vy, theta, r_radius] -> 6 dims
-        # Local sensing block (per obstacle): [rel_x, rel_y, vx, vy, radius, mask] -> 6 dims
-        # Total: 6 + K * 6
-        self.obs_dim = 6 + self.max_obstacles_obs * 6
+        # --- Base Observation (absolute protocol) ---
+        # Robot+goal block: [rx, ry, gx, gy, rvx, rvy, theta, r_radius] -> 8 dims
+        # Local sensing block (per obstacle): [hx, hy, hvx, hvy, hradius, mask] -> 6 dims
+        # Total: 8 + K * 6
+        self.obs_dim = 8 + self.max_obstacles_obs * 6
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.obs_dim,), dtype=np.float32)
         self.action_space = self.robot.action_space
         if self.robot_type == 'unicycle' and self.rl_xy_to_unicycle:
@@ -226,6 +226,9 @@ class SocialNav(gym.Env):
 
         # 2. human position update (with optional goal changing)
         self._update_human_states()
+
+        # 3. Hard wall clamp: keep robot/humans inside [-half_extent, half_extent].
+        self._clip_positions_to_wall()
         
         # 4. calculate distances
         dist_to_goal, min_dist = self._compute_distances(self.human_positions)
@@ -234,6 +237,24 @@ class SocialNav(gym.Env):
         reward, done, info = self._compute_reward_and_done(dist_to_goal, min_dist, self.robot.u)
             
         return self._get_obs(), reward, done, False, info
+
+    def _get_wall_half_extent(self):
+        return float(self.human_circle_radius + getattr(self, "human_init_noise_range", 0.0))
+
+    def _clip_positions_to_wall(self):
+        half_extent = self._get_wall_half_extent()
+        lo, hi = -half_extent, half_extent
+
+        np.clip(self.robot_pos, lo, hi, out=self.robot_pos)
+        np.clip(self.human_positions, lo, hi, out=self.human_positions)
+
+        # Keep internal robot state and trajectory buffers aligned with clipped positions.
+        if hasattr(self, "robot_state") and self.robot_state is not None:
+            self.robot_state[0:2] = self.robot_pos
+        if self.robot_traj:
+            self.robot_traj[-1] = self.robot_pos.copy()
+        if self.human_traj_steps:
+            self.human_traj_steps[-1] = self.human_positions.copy()
 
     def _init_robot_humans(self, options=None):
         if options and options.get("scenario") == "crossing":
@@ -520,20 +541,19 @@ class SocialNav(gym.Env):
         k = int(self.max_obstacles_obs)
         robot_v_scale = max(float(getattr(self.robot, "vmax", 1.0)), 1e-6)
         human_v_scale = max(float(self.human_vmax), 1e-6)
-        rel_scale = max(float(self.sensing_radius), 1e-6)
-        goal_scale = max(float(self.arena_size), 1e-6)
+        pos_scale = max(float(self._get_wall_half_extent()), 1e-6)
         radius_scale = max(float(self.human_radius_max), float(self.robot_radius), 1e-6)
 
-        # Robot block: [goal_rel_x, goal_rel_y, vx, vy, theta, radius]
-        x[0:2] /= goal_scale
-        x[2:4] /= robot_v_scale
-        x[4] /= np.pi
-        x[5] /= radius_scale
+        # Robot+goal block: [rx, ry, gx, gy, rvx, rvy, theta, radius]
+        x[0:4] /= pos_scale
+        x[4:6] /= robot_v_scale
+        x[6] /= np.pi
+        x[7] /= radius_scale
 
-        # Obstacle blocks: [rel_x, rel_y, vx, vy, radius, mask]
-        if x.size >= 6 + 6 * k:
-            blocks = x[6:6 + 6 * k].reshape(k, 6)
-            blocks[:, 0:2] /= rel_scale
+        # Obstacle blocks: [hx, hy, hvx, hvy, radius, mask]
+        if x.size >= 8 + 6 * k:
+            blocks = x[8:8 + 6 * k].reshape(k, 6)
+            blocks[:, 0:2] /= pos_scale
             blocks[:, 2:4] /= human_v_scale
             blocks[:, 4] /= radius_scale
             # mask stays 0/1
@@ -541,11 +561,11 @@ class SocialNav(gym.Env):
         return np.clip(x, -5.0, 5.0)
 
     def _get_obs(self):
-        # --- Robot state block ---
-        goal_rel = self.robot_pos - self.goal_pos
+        # --- Robot+goal absolute block ---
         robot_state = np.array([
-            goal_rel[0], goal_rel[1], 
-            self.robot_vel[0], self.robot_vel[1], 
+            self.robot_pos[0], self.robot_pos[1],
+            self.goal_pos[0], self.goal_pos[1],
+            self.robot_vel[0], self.robot_vel[1],
             self.robot_theta,
             self.robot_radius
         ], dtype=float)
@@ -553,7 +573,7 @@ class SocialNav(gym.Env):
         k = self.max_obstacles_obs
         obs_blocks = np.zeros((k, 6), dtype=float)  # dummy blocks: [0, 0, 0, 0, 0, 0]
 
-        # rel = p_r - p_h
+        # Use robot-relative distances for visibility/ranking only.
         rel = self.robot_pos - self.human_positions
         dists = np.linalg.norm(rel, axis=1)
         visible_idx = np.where(dists <= self.sensing_radius)[0]
@@ -561,7 +581,7 @@ class SocialNav(gym.Env):
             order = np.argsort(dists[visible_idx])
             selected = visible_idx[order[:k]]
             rows = np.arange(selected.size)
-            obs_blocks[rows, 0:2] = rel[selected]
+            obs_blocks[rows, 0:2] = self.human_positions[selected]
             obs_blocks[rows, 2:4] = self.human_vels[selected]
             obs_blocks[rows, 4] = self.human_radii[selected]
             obs_blocks[rows, 5] = 1.0  # mask
@@ -583,9 +603,9 @@ class SocialNav(gym.Env):
                 plt.show()
 
         self.ax.clear()
-        margin = 0.5
-        self.ax.set_xlim(-self.arena_size-margin, self.arena_size+margin)
-        self.ax.set_ylim(-self.arena_size-margin, self.arena_size+margin)
+        half_extent = self._get_wall_half_extent()-3 # TODO CNN should use bound: self._get_wall_half_extent()
+        self.ax.set_xlim(-half_extent, half_extent)
+        self.ax.set_ylim(-half_extent, half_extent)
         self.ax.set_aspect('equal')
         
         # Draw Goal

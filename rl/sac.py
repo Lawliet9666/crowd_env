@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
+from crowd_sim.utils import absolute_obs_batch_to_relative, relative_obs_dim_from_env_dim
 
 
 LOG_STD_MIN = -20.0
@@ -94,7 +95,8 @@ class SAC:
             obs_space = env.observation_space
             act_space = env.action_space
 
-        self.obs_dim = int(np.prod(obs_space.shape))
+        env_obs_dim = int(np.prod(obs_space.shape))
+        self.obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim))
         self.act_dim = int(np.prod(act_space.shape))
         self.action_low = np.asarray(act_space.low, dtype=np.float32).reshape(-1)
         self.action_high = np.asarray(act_space.high, dtype=np.float32).reshape(-1)
@@ -192,6 +194,7 @@ class SAC:
         next_save_step = self._next_save_step()
 
         obs, _ = self.env.reset(seed=self.seed)
+        obs = self._to_policy_obs(obs)
 
         while t_so_far < total_timesteps:
             t_so_far += 1
@@ -204,6 +207,7 @@ class SAC:
                 action, _ = self.get_action(obs, deterministic=False)
 
             next_obs, rew, terminated, truncated, info = self.env.step(action)
+            next_obs = self._to_policy_obs(next_obs)
             done = bool(terminated or truncated)
 
             self.replay_buffer.add(obs, action, rew, next_obs, float(done))
@@ -242,6 +246,7 @@ class SAC:
 
                 reset_seed = None if self.seed is None else int(self.seed) + episode_idx
                 obs, _ = self.env.reset(seed=reset_seed)
+                obs = self._to_policy_obs(obs)
                 ep_len = 0
                 ep_ret = 0.0
 
@@ -261,7 +266,8 @@ class SAC:
         if deterministic is None:
             deterministic = bool(self.deterministic)
 
-        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=self.device).reshape(1, -1)
+        obs_rel = self._to_policy_obs(obs)
+        obs_t = torch.as_tensor(obs_rel, dtype=torch.float32, device=self.device).reshape(1, -1)
         with torch.no_grad():
             action_t, logp_t, mean_t = self._sample_action(obs_t, deterministic=deterministic)
 
@@ -484,6 +490,7 @@ class SAC:
         for ep in range(episodes):
             eval_seed = None if self.eval_seed is None else int(self.eval_seed) + ep
             obs, _ = self.eval_env.reset(seed=eval_seed)
+            obs = self._to_policy_obs(obs)
 
             done = False
             ep_ret = 0.0
@@ -494,6 +501,7 @@ class SAC:
             while not done and ep_len < int(self.max_timesteps_per_episode):
                 action, _ = self.get_action(obs, deterministic=True)
                 obs, rew, terminated, truncated, info = self.eval_env.step(action)
+                obs = self._to_policy_obs(obs)
                 done = bool(terminated or truncated)
                 ep_ret += float(rew)
                 ep_len += 1
@@ -624,6 +632,10 @@ class SAC:
             rel_y = float(obs_arr[7])
             return rel_x * rel_x + rel_y * rel_y - float(self.safe_dist) ** 2
         return np.nan
+
+    @staticmethod
+    def _to_policy_obs(obs):
+        return absolute_obs_batch_to_relative(obs)
 
     def _init_hyperparameters(self, hyperparameters):
         self.timesteps_per_batch = 2_000
