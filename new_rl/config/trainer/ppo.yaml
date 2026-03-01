@@ -1,7 +1,7 @@
 total_steps: 10000000  # total steps for rollout collection
-batch_size: 2048        # rollout size
-num_envs: 8             
-minibatch_size: 64
+batch_size: 4096        # rollout size
+num_envs: 16             
+minibatch_size: 128
 update_epochs: 5
 
 gamma: 0.99
