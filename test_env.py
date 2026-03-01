@@ -21,7 +21,7 @@ def run_env_test(
 
     # parameter overrides for testing
     config.human.num_humans = human_num  # Test with multiple humans to verify dynamics and rendering
-    config.env.max_obstacles_obs = 5  # how many humans are included in the observation  
+    config.env.max_obstacles_obs = human_num  # how many humans are included in the observation  
     config.robot.vmax = 1.0  # Set robot max speed to a reasonable value for testing
     config.robot.radius = 0.3  # Set robot radius to a reasonable value for testing
     config.robot.wmax = np.pi / 2  # Set max angular velocity for unicycle (if applicable)
@@ -33,6 +33,7 @@ def run_env_test(
     env = build_env(env_name, render_mode, config)
 
     obs, info = env.reset(seed=seed)
+    import pdb; pdb.set_trace()
 
     frames = []
     done = False
