@@ -2,6 +2,7 @@
 # training during eval
 # final eval
 
+import json
 from omegaconf import DictConfig, OmegaConf
 import torch.nn as nn
 import torch
@@ -17,6 +18,7 @@ from new_rl.utils import map_action_to_env
 import numpy as np
 from functools import partial
 import gymnasium as gym
+import shutil
 
 
 class Trainer:
@@ -41,15 +43,24 @@ class Trainer:
     
     def setup_wandb(self):
         run_name = self.config.run_name + "-" + self.config.model.type +  \
-            f"-bs{self.batch_size}-ep{self.config.trainer.update_epochs}-lr{self.config.trainer.lr:.1e}-{self.config.trainer.lr_schedule}-vf{self.config.trainer.vf_coef}-{self.config.trainer.action_bound_method}"
+            f"-bs{self.batch_size}-ep{self.config.trainer.update_epochs}-lr{self.config.trainer.lr:.1e}-{self.config.trainer.lr_schedule[:4]}-vf{self.config.trainer.vf_coef}-{self.config.trainer.action_bound_method}"
         
         if self.config.trainer.ent_coef > 0:
             run_name += f"-ent{self.config.trainer.ent_coef}"
+            if self.config.trainer.ent_coef_decay:
+                run_name += "decay"
         if not self.config.trainer.return_scale_only:
             run_name += "-rss"
         
         if self.config.env.type == "crowdsim":
-            run_name += f"-reward-suc{self.config.env.success_reward}-col{self.config.env.collision_penalty}-pot{self.config.env.potential_factor}-pen{self.config.env.constant_penalty}"
+            if self.config.env.success_reward != 20:
+                run_name += f"-suc{self.config.env.success_reward}"
+            if self.config.env.collision_penalty != -20:
+                run_name += f"-col{self.config.env.collision_penalty}"
+            if self.config.env.potential_factor != 3.0:
+                run_name += f"-pot{self.config.env.potential_factor}"
+            if self.config.env.constant_penalty != -0.025:
+                run_name += f"-pen{self.config.env.constant_penalty}"
         
         self.run_name = run_name if self.config.run_name != "testest" else "testest"
         self.save_dir = os.path.join(self.config.save_dir, self.run_name)
@@ -57,7 +68,11 @@ class Trainer:
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir)
         else:
-            raise ValueError(f"Save directory {self.save_dir} already exists, please use a different run_name or delete the existing directory")
+            if not self.config.overwrite:
+                raise ValueError(f"Save directory {self.save_dir} already exists, please use a different run_name or delete the existing directory")
+            else:
+                shutil.rmtree(self.save_dir)
+                os.makedirs(self.save_dir)
         
         with open(os.path.join(self.save_dir, "config.yaml"), "w") as f:
             OmegaConf.save(self.config, f)
@@ -165,7 +180,7 @@ class Trainer:
         raise NotImplementedError("Training is not implemented yet")
     
     
-    def eval(self, episodes: int = 10, seed: int = 1000):
+    def eval(self, episodes: int = 20, seed: int = 1000):
         """Evaluate policy deterministically (mean action) in a single env."""
 
         env = self.make_env_fn()()
@@ -208,8 +223,8 @@ class Trainer:
         return float(np.mean(returns)), float(np.std(returns)), success_count/episodes, collision_count/episodes, timeout_count/episodes
 
     
-    def save_ckpt(self, save_dir: str, step: int, max_keep: int = 10):
-        """Save checkpoint and keep only the latest `max_keep` checkpoints."""
+    def save_ckpt(self, save_dir: str, step: int, performance: float, max_keep: int = 10):
+        """Save checkpoint and keep only the top `max_keep` checkpoints by performance."""
         os.makedirs(save_dir, exist_ok=True)
         path = os.path.join(save_dir, f"ckpt_{step:08d}.pt")
         ckpt = {
@@ -231,14 +246,35 @@ class Trainer:
             }
         torch.save(ckpt, path)
 
-        # Keep only latest max_keep checkpoints
-        pattern = os.path.join(save_dir, "ckpt_*.pt")
-        files = glob.glob(pattern)
-        # Sort by step (extract number from filename)
-        def step_from_path(p):
-            m = re.search(r"ckpt_(\d+)\.pt$", os.path.basename(p))
-            return int(m.group(1)) if m else 0
+        # Maintain manifest: {filename -> {step, performance}}
+        manifest_path = os.path.join(save_dir, "ckpt_manifest.json")
+        if os.path.exists(manifest_path):
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+        else:
+            manifest = {}
 
-        files_sorted = sorted(files, key=step_from_path)
-        for old_path in files_sorted[:-max_keep]:
-            os.remove(old_path)
+        pattern = os.path.join(save_dir, "ckpt_*.pt")
+        for p in glob.glob(pattern):
+            name = os.path.basename(p)
+            if name not in manifest:
+                m = re.search(r"ckpt_(\d+)\.pt$", name)
+                step_val = int(m.group(1)) if m else 0
+                manifest[name] = {"step": step_val, "performance": float("-inf")}
+
+        manifest[os.path.basename(path)] = {"step": step, "performance": performance}
+
+        # Sort by performance descending, keep top max_keep
+        entries = [(name, info["performance"]) for name, info in manifest.items()]
+        entries_sorted = sorted(entries, key=lambda x: x[1], reverse=True)
+        to_keep = {name for name, _ in entries_sorted[:max_keep]}
+        to_remove = [name for name in manifest if name not in to_keep]
+
+        for name in to_remove:
+            old_path = os.path.join(save_dir, name)
+            if os.path.exists(old_path):
+                os.remove(old_path)
+            del manifest[name]
+
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)

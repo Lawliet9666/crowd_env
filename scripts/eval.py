@@ -8,6 +8,7 @@ from functools import partial
 import glob
 import json
 from tqdm import tqdm
+import gymnasium as gym
 
 
 class Evaluator:
@@ -20,7 +21,6 @@ class Evaluator:
         
     def prepare_env(self):
         if self.config.env.type == "mujoco":
-            import gymnasium as gym
             def make_env_fn(seed_offset: int = 0):
                 def _thunk():
                     env = gym.make(self.config.env.env_id)
@@ -31,8 +31,10 @@ class Evaluator:
                 return _thunk
             self.make_env_fn = make_env_fn
         else:
+            import sys
+            sys.path.append(os.path.dirname(os.path.dirname(__file__)))
             from config.config import Config as CrowdSimConfig
-            from crowd_sim.utils import build_env
+            from crowd_sim.utils import build_env   
             self.crowd_sim_config = CrowdSimConfig()
             # TODO: change config here later
             def make_env_fn(config: CrowdSimConfig, env_name: str):
@@ -79,8 +81,8 @@ class Evaluator:
             self.return_normalizer.count = return_normalizer["count"]
         else:
             self.return_normalizer = None
-        mean_return, std_return = self.evaluate()
-        return mean_return, std_return
+        mean_return, std_return, success_rate, collision_rate, timeout_rate = self.evaluate()
+        return mean_return, std_return, success_rate, collision_rate, timeout_rate
     
     def eval_all_ckpts(self):
         ckpt_paths = glob.glob(os.path.join(self.save_dir, "ckpt_*.pt")) # sorted by step
@@ -88,12 +90,15 @@ class Evaluator:
         results = {}
         for ckpt_path in ckpt_paths:
             print(f"Evaluating {ckpt_path}...")
-            mean_return, std_return = self.evaluate_one_ckpt(ckpt_path)
-            print(f"\tMean return: {mean_return:.2f}, std return: {std_return:.2f}")
+            mean_return, std_return, success_rate, collision_rate, timeout_rate = self.evaluate_one_ckpt(ckpt_path)
+            print(f"\tMean return: {mean_return:.2f}, std return: {std_return:.2f}, success rate: {success_rate:.2f}, collision rate: {collision_rate:.2f}, timeout rate: {timeout_rate:.2f}")
             step = int(ckpt_path.split("_")[-1].split(".")[0])
             results[step] = {
                 "mean_return": mean_return,
                 "std_return": std_return,
+                "success_rate": success_rate,
+                "collision_rate": collision_rate,
+                "timeout_rate": timeout_rate,
             }
             
         # calculate min, max, mean of all the ckpts
@@ -101,12 +106,30 @@ class Evaluator:
         max_return = max(results.values(), key=lambda x: x["mean_return"])["mean_return"]
         mean_return = np.mean([x["mean_return"] for x in results.values()])
         std_return = np.std([x["mean_return"] for x in results.values()])
+        mean_success_rate = np.mean([x["success_rate"] for x in results.values()])
+        mean_collision_rate = np.mean([x["collision_rate"] for x in results.values()])
+        mean_timeout_rate = np.mean([x["timeout_rate"] for x in results.values()])
+        max_success_rate = max(results.values(), key=lambda x: x["success_rate"])["success_rate"]
+        max_collision_rate = max(results.values(), key=lambda x: x["collision_rate"])["collision_rate"]
+        max_timeout_rate = max(results.values(), key=lambda x: x["timeout_rate"])["timeout_rate"]
+        min_success_rate = min(results.values(), key=lambda x: x["success_rate"])["success_rate"]
+        min_collision_rate = min(results.values(), key=lambda x: x["collision_rate"])["collision_rate"]
+        min_timeout_rate = min(results.values(), key=lambda x: x["timeout_rate"])["timeout_rate"]
         
         results["aggregate"] = {
             "min_return": min_return,
             "max_return": max_return,
             "mean_return": mean_return,
             "std_return": std_return,
+            "mean_success_rate": mean_success_rate,
+            "mean_collision_rate": mean_collision_rate,
+            "mean_timeout_rate": mean_timeout_rate,
+            "max_success_rate": max_success_rate,
+            "max_collision_rate": max_collision_rate,
+            "max_timeout_rate": max_timeout_rate,
+            "min_success_rate": min_success_rate,
+            "min_collision_rate": min_collision_rate,
+            "min_timeout_rate": min_timeout_rate,
         }
         
         with open(os.path.join(self.save_dir, "eval_results.json"), "w") as f:
@@ -122,6 +145,10 @@ class Evaluator:
         action_high = np.asarray(action_space.high, dtype=np.float32)
         seeds = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
         episodes = 50
+        success_count = 0
+        collision_count = 0
+        timeout_count = 0
+        total_episodes = 0
         returns = []
         for seed in tqdm(seeds, desc="Evaluating"):
             for ep in range(episodes):
@@ -148,15 +175,19 @@ class Evaluator:
                         self.config.trainer.action_bound_method,
                     )
 
-                    obs_np, r, term, trunc, _ = env.step(action_np)
+                    obs_np, r, term, trunc, info = env.step(action_np)
                     done = term or trunc
                     total += float(r)
                 returns.append(total)
+                total_episodes += 1
+                success_count += int(info.get("is_success", False))
+                collision_count += int(info.get("is_collision", False))
+                timeout_count += int(info.get("is_timeout", False))
         
         env.close()
         mean_return = float(np.mean(returns))
         std_return = float(np.std(returns))
-        return mean_return, std_return
+        return mean_return, std_return, success_count/total_episodes, collision_count/total_episodes, timeout_count/total_episodes
 
 
 if __name__ == "__main__":

@@ -28,6 +28,16 @@ class PPOBaseTrainer(Trainer):
             new_lr = cfg.lr
         self.optimizer.param_groups[0]["lr"] = new_lr
 
+    def _update_ent_coef(self, update: int) -> None:
+        ent_coef_decay = self.config.trainer.ent_coef_decay
+        ent_max = self.config.trainer.ent_coef
+        ent_min = 0.0
+        if ent_coef_decay:
+            progress = update / self.num_updates
+            self.ent_coef = ent_max + (ent_min - ent_max) * min(1.0, progress)
+        else:
+            self.ent_coef = ent_max
+
     def _collect_rollout(
         self,
         obs_np: np.ndarray,
@@ -236,17 +246,17 @@ class PPOBaseTrainer(Trainer):
                     vf_loss = 0.5 * (newv - mb_ret).pow(2).mean()
 
                 ent_loss = entropy.mean()
-                loss = pg_loss + self.config.trainer.vf_coef * vf_loss - self.config.trainer.ent_coef * ent_loss
+                loss = pg_loss + self.config.trainer.vf_coef * vf_loss - self.ent_coef * ent_loss
 
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.config.trainer.max_grad_norm)
                 self.optimizer.step()
 
-                mb_pg_losses.append(float(pg_loss))
-                mb_vf_losses.append(float(vf_loss))
-                mb_ent_losses.append(float(ent_loss))
-                mb_total_losses.append(float(loss))
+                mb_pg_losses.append(float(pg_loss.item()))
+                mb_vf_losses.append(float(vf_loss.item()))
+                mb_ent_losses.append(float(ent_loss.item()))
+                mb_total_losses.append(float(loss.item()))
 
                 with torch.no_grad(): # logging
                     approx_kl = float((mb_logp - newlogp).mean())
@@ -276,6 +286,7 @@ class PPOBaseTrainer(Trainer):
         log_dict = {
             "global_step": global_step,
             "charts/learning_rate": self.optimizer.param_groups[0]["lr"],
+            "charts/ent_coef": self.ent_coef,
             "charts/sps": sps,
             "loss/policy": np.mean(mb_pg_losses) if mb_pg_losses else np.nan,
             "loss/value": np.mean(mb_vf_losses) if mb_vf_losses else np.nan,
@@ -327,6 +338,7 @@ class PPOBaseTrainer(Trainer):
 
         for update in range(1, self.num_updates + 1):
             self._update_lr(update)
+            self._update_ent_coef(update)
 
             self.model.eval()
             next_obs_t, obs_np, global_step = self._collect_rollout(obs_np, action_low, action_high, buffers)
@@ -351,15 +363,16 @@ class PPOBaseTrainer(Trainer):
 
             sps = int(global_step / (time.time() - start_time))
 
-            do_eval = self.config.trainer.eval_interval > 0 and (update % self.config.trainer.eval_interval == 0 or update == 1)
+            do_eval = update % self.config.trainer.eval_interval == 0 or update == 1 or update == self.num_updates
             if do_eval:
-                eval_mean, eval_std, success_rate, collision_rate, timeout_rate = self.eval(episodes=self.config.trainer.eval_episodes, seed=self.config.seed)
+                eval_mean, eval_std, success_rate, collision_rate, timeout_rate = self.eval(episodes=self.config.trainer.eval_episodes)
                 print(
                     f"update {update:4d}/{self.num_updates} | steps {global_step:8d} | "
                     f"eval {eval_mean:8.2f}±{eval_std:5.2f} | "
                     f"success {success_rate:.3f} | collision {collision_rate:.3f} | timeout {timeout_rate:.3f} | "
                     f"kl {np.mean(approx_kls):.4f} | clip {np.mean(clipfracs):.3f} | sps {sps} | time {(time.time() - start_time) / 3600:.2f}hrs"
                 )
+                self.save_ckpt(self.save_dir, step=global_step, performance=eval_mean, max_keep=10)
             else:
                 eval_mean, eval_std, success_rate, collision_rate, timeout_rate = float("nan"), float("nan"), float("nan"), float("nan"), float("nan")
 
@@ -379,10 +392,6 @@ class PPOBaseTrainer(Trainer):
                 timeout_rate,
                 sps,
             )
-
-            ckpt_interval = self.config.trainer.ckpt_interval
-            if ckpt_interval > 0 and update % ckpt_interval == 0:
-                self.save_ckpt(self.save_dir, step=global_step)
 
         self.train_envs.close()
         wandb.finish()
