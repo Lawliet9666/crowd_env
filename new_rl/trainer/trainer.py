@@ -44,13 +44,16 @@ class Trainer:
         run_name = self.config.run_name + "-" + self.config.model.type +  \
             f"-bs{self.batch_size}-ep{self.config.trainer.update_epochs}-lr{self.config.trainer.lr:.1e}-{self.config.trainer.lr_schedule[:4]}-vf{self.config.trainer.vf_coef}-{self.config.trainer.action_bound_method}"
         
+        self.human_num = self.config.trainer.max_human_num
         if self.config.trainer.use_cirriculum:
             run_name = "CL-" + run_name
             self.use_cirriculum = True
             self.initial_human_num = self.config.trainer.initial_human_num
             self.human_num = self.initial_human_num
             self.increase_human_num = self.config.trainer.increase_human_num
-            
+            self.max_human_num = self.config.trainer.max_human_num
+        else:
+            self.use_cirriculum = False
         if self.config.trainer.ent_coef > 0:
             run_name += f"-ent{self.config.trainer.ent_coef}"
             if self.config.trainer.ent_coef_decay:
@@ -276,6 +279,9 @@ class Trainer:
                 "var": self.return_normalizer.var,
                 "count": self.return_normalizer.count,
             }
+        if self.use_cirriculum:
+            if self.human_num < self.max_human_num:
+                return 
         torch.save(ckpt, path)
 
         # Maintain manifest: {filename -> {step, performance}}

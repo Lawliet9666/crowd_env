@@ -38,3 +38,4 @@ eval_episodes: 20
 use_cirriculum: false
 initial_human_num: 4
 increase_human_num: 4
+max_human_num: 20
