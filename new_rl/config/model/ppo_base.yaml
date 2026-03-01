@@ -1,4 +1,11 @@
+_target_: new_rl.model.ppo_base.ActorCritic
 type: "ppo_base"
+obs_dim: ${env.obs_dim}
+act_dim: ${env.act_dim}
+actor_mlp_config: ${model.actor.mlp}
+critic_mlp_config: ${model.critic.mlp}
+use_obs_norm: ${trainer.use_obs_norm}
+use_return_norm: ${trainer.use_return_norm}
 actor:
   mlp:
     hidden_sizes: [64, 64]

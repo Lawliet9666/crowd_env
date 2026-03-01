@@ -4,7 +4,6 @@
 
 import json
 from omegaconf import DictConfig, OmegaConf
-import torch.nn as nn
 import torch
 import os
 import glob
@@ -12,12 +11,12 @@ import re
 from new_rl.utils import init_weights
 from new_rl.utils import set_seed
 from gymnasium.vector import SyncVectorEnv, AsyncVectorEnv
-from new_rl.utils import RunningMeanStd
 import wandb
 from new_rl.utils import map_action_to_env
 import numpy as np
 import gymnasium as gym
 import shutil
+
 
 
 class Trainer:
@@ -37,15 +36,20 @@ class Trainer:
         
         self.setup_wandb()
         self.setup_env()
-        self.setup_normalizer()
         self.setup_model_and_optimizer() 
+
+    def _get_curriculum_enabled(self) -> bool:
+        # Keep backward compatibility with the existing misspelled config key.
+        if "use_curriculum" in self.config.trainer:
+            return bool(self.config.trainer.use_curriculum)
+        return bool(self.config.trainer.use_cirriculum)
     
     def setup_wandb(self):
         run_name = self.config.run_name + "-" + self.config.model.type +  \
             f"-bs{self.batch_size}-ep{self.config.trainer.update_epochs}-lr{self.config.trainer.lr:.1e}-{self.config.trainer.lr_schedule[:4]}-vf{self.config.trainer.vf_coef}-{self.config.trainer.action_bound_method}"
         
         self.human_num = self.config.trainer.max_human_num
-        if self.config.trainer.use_cirriculum:
+        if self._get_curriculum_enabled():
             run_name = "CL-" + run_name
             self.use_cirriculum = True
             self.initial_human_num = self.config.trainer.initial_human_num
@@ -79,7 +83,7 @@ class Trainer:
             if self.config.env.constant_penalty != -0.025:
                 run_name += f"-pen{self.config.env.constant_penalty}"
         
-        self.run_name = run_name if self.config.run_name != "testest" else "testest"
+        self.run_name = run_name
         self.save_dir = os.path.join(self.config.save_dir, self.run_name)
 
         if not os.path.exists(self.save_dir):
@@ -98,22 +102,12 @@ class Trainer:
             
         wandb.init(
             project=self.config.wandb_project,
+            entity=self.config.wandb_entity,
             name=self.run_name,
             config=OmegaConf.to_container(self.config, resolve=True),
         )
         
   
-    def setup_normalizer(self):
-        if self.config.trainer.use_obs_norm:
-            self.obs_normalizer = RunningMeanStd(shape=(self.config.env.obs_dim,))
-        else:
-            self.obs_normalizer = None
-        
-        if self.config.trainer.use_return_norm:
-            self.return_normalizer = RunningMeanStd(shape=())
-        else:
-            self.return_normalizer = None
-    
     def setup_model_and_optimizer(self):
         if self.config.model.type == "ppo_base":
             from new_rl.model.ppo_base import ActorCritic
@@ -121,7 +115,10 @@ class Trainer:
                 obs_dim=self.config.env.obs_dim,
                 act_dim=self.config.env.act_dim,
                 actor_mlp_config=self.config.model.actor.mlp,
-                critic_mlp_config=self.config.model.critic.mlp)
+                critic_mlp_config=self.config.model.critic.mlp,
+                use_obs_norm=self.config.trainer.use_obs_norm,
+                use_return_norm=self.config.trainer.use_return_norm,
+            )
             self.model.to(self.device)
         else:
             raise ValueError(f"Model type {self.config.model.type} not supported")
@@ -167,18 +164,20 @@ class Trainer:
                 print(f"Adjusting constant penalty from default {self.crowd_sim_config.reward.constant_penalty} to {constant_penalty}")
                 self.crowd_sim_config.reward.constant_penalty = constant_penalty
                 
-            if self.config.trainer.use_cirriculum:
+            if self._get_curriculum_enabled():
                 self.crowd_sim_config.human.num_humans = self.human_num
             
-            def make_env_fn(config: CrowdSimConfig, env_name: str):
+            def make_env_fn(config: CrowdSimConfig, env_name: str, seed_offset: int = 0):
                 def _init():
                     env = build_env(env_name, render_mode=None, config=config)
                     env = gym.wrappers.RecordEpisodeStatistics(env)
-                    env.reset(seed=self.config.seed)
+                    env.reset(seed=self.config.seed + seed_offset)
                     return env
                 return _init
             print(f"Initializing env with {self.human_num} humans")
-            self.train_envs = AsyncVectorEnv([make_env_fn(self.crowd_sim_config, self.config.env.env_id) for _ in range(num_envs)])
+            self.train_envs = AsyncVectorEnv(
+                [make_env_fn(self.crowd_sim_config, self.config.env.env_id, i) for i in range(num_envs)]
+            )
             self.make_env_fn = make_env_fn
         
 
@@ -203,13 +202,18 @@ class Trainer:
         # for cirriculum learning, reset the env with different human numbers
         if not self.use_cirriculum:
             return
-        if self.human_num >= 20:
+        if self.human_num >= self.max_human_num:
             return
         self.train_envs.close()
-        self.human_num = min(self.human_num + self.increase_human_num, 20)
+        self.human_num = min(self.human_num + self.increase_human_num, self.max_human_num)
         print(f"Resetting env with {self.human_num} humans")
         self.crowd_sim_config.human.num_humans = self.human_num
-        self.train_envs = AsyncVectorEnv([self.make_env_fn(self.crowd_sim_config, self.config.env.env_id) for _ in range(self.config.trainer.num_envs)])
+        self.train_envs = AsyncVectorEnv(
+            [
+                self.make_env_fn(self.crowd_sim_config, self.config.env.env_id, i)
+                for i in range(self.config.trainer.num_envs)
+            ]
+        )
 
     def train(self):
         raise NotImplementedError("Training is not implemented yet")
@@ -218,28 +222,23 @@ class Trainer:
     def eval(self, episodes: int = 10):
         """Evaluate policy deterministically (mean action) in a single env."""
         self.model.eval()
-        env = self.make_env_fn(self.crowd_sim_config, self.config.env.env_id)()
+        if self.config.env.type == "crowdsim":
+            env = self.make_env_fn(self.crowd_sim_config, self.config.env.env_id, 0)()
+        else:
+            env = self.make_env_fn(0)()
         returns = []
         success_count = 0
         collision_count = 0
         timeout_count = 0
-        for seed in [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]:
+        for seed in range(100, 1000 + 1, 100):
             for ep in range(episodes):
                 obs_np, _ = env.reset(seed=seed + ep)
                 done = False
                 total = 0.0
                 while not done:
-                    if self.obs_normalizer is not None:
-                        obs_norm = self.obs_normalizer.normalize(obs_np)
-                        if isinstance(obs_norm, torch.Tensor):
-                            obs_t = obs_norm.float().to(self.device).unsqueeze(0)
-                        else:
-                            obs_t = torch.tensor(obs_norm, dtype=torch.float32, device=self.device).unsqueeze(0)
-                    else:
-                        obs_t = torch.tensor(obs_np, dtype=torch.float32, device=self.device).unsqueeze(0)
-
+                    obs_t = torch.tensor(obs_np, dtype=torch.float32, device=self.device).unsqueeze(0)
                     with torch.no_grad():
-                        action = self.model.actor.net(obs_t).squeeze(0)  # deterministic (mean)
+                        action = self.model.get_action_deterministic(obs_t).squeeze(0)
 
                     action_np = map_action_to_env(
                         action.cpu().numpy(),
@@ -257,7 +256,10 @@ class Trainer:
                 timeout_count += int(info.get("is_timeout", False))
         env.close()
         total_count = success_count + collision_count + timeout_count
-        return float(np.mean(returns)), float(np.std(returns)), success_count/total_count, collision_count/total_count, timeout_count/total_count
+        if total_count == 0:
+            return float(np.mean(returns)), float(np.std(returns)), 0.0, 0.0, 0.0
+        else:
+            return float(np.mean(returns)), float(np.std(returns)), float(success_count)/total_count, float(collision_count)/total_count, float(timeout_count)/total_count
 
     
     def save_ckpt(self, save_dir: str, step: int, performance: float, max_keep: int = 10):
@@ -266,21 +268,8 @@ class Trainer:
         path = os.path.join(save_dir, f"ckpt_{step:08d}.pt")
         ckpt = {
             "model": self.model.state_dict(),
-            # "optimizer": self.optimizer.state_dict(),
             "step": step,
         }
-        if self.obs_normalizer is not None:
-            ckpt["obs_normalizer"] = {
-                "mean": self.obs_normalizer.mean,
-                "var": self.obs_normalizer.var,
-                "count": self.obs_normalizer.count,
-            }
-        if self.return_normalizer is not None:
-            ckpt["return_normalizer"] = {
-                "mean": self.return_normalizer.mean,
-                "var": self.return_normalizer.var,
-                "count": self.return_normalizer.count,
-            }
         if self.use_cirriculum:
             if self.human_num < self.max_human_num:
                 return 

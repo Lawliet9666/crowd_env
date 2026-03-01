@@ -50,7 +50,7 @@ class PPOBaseTrainer(Trainer):
         model = self.model
         device = self.device
         steps_per_env = self.steps_per_env
-        obs_normalizer = self.obs_normalizer
+        obs_normalizer = self.model.obs_normalizer
         
         success_count = 0
         collision_count = 0
@@ -62,10 +62,7 @@ class PPOBaseTrainer(Trainer):
 
             if obs_normalizer is not None:
                 obs_normalizer.update(obs_np)
-                obs_norm = obs_normalizer.normalize(obs_np)
-                obs_t = obs_norm.float().to(device) if isinstance(obs_norm, torch.Tensor) else torch.tensor(obs_norm, dtype=torch.float32, device=device)
-            else:
-                obs_t = torch.tensor(obs_np, dtype=torch.float32, device=device)
+            obs_t = torch.tensor(obs_np, dtype=torch.float32, device=device)
 
             with torch.no_grad():
                 action, logp, _, value = model.get_action_and_value(obs_t)
@@ -84,13 +81,13 @@ class PPOBaseTrainer(Trainer):
             if "episode" in infos:
                 returns = infos.get("episode", {}).get("r", [])
                 lengths = infos.get("episode", {}).get("l", [])
-                success_count += np.sum(infos.get("is_success"))
-                collision_count += np.sum(infos.get("is_collision"))
-                timeout_count += np.sum(infos.get("is_timeout"))
+                success_count += np.sum(infos.get("is_success", 0))
+                collision_count += np.sum(infos.get("is_collision", 0))
+                timeout_count += np.sum(infos.get("is_timeout", 0))
                 finished = [(r, lengths[i]) for i, r in enumerate(returns) if r is not None]
                 if finished:
                     rets, lens = zip(*finished)
-                    if global_step % 100 == 0:
+                    if global_step % self.config.wandb_interval == 0:
                         wandb.log(
                             {"train/episodic_return": np.mean(rets), 
                             "train/episodic_length": np.mean(lens)
@@ -100,7 +97,7 @@ class PPOBaseTrainer(Trainer):
 
             obs_np = next_obs_np
         
-        if global_step % 100 == 0:
+        if global_step % self.config.wandb_interval == 0 and success_count + collision_count + timeout_count > 0:
             wandb.log(
                 {
                     "train/success_rate": success_count / (success_count + collision_count + timeout_count),
@@ -112,11 +109,7 @@ class PPOBaseTrainer(Trainer):
 
         buffers["global_step"] = global_step
 
-        if obs_normalizer is not None:
-            next_obs_norm = obs_normalizer.normalize(obs_np)
-            next_obs_t = next_obs_norm.float().to(device) if isinstance(next_obs_norm, torch.Tensor) else torch.tensor(next_obs_norm, dtype=torch.float32, device=device)
-        else:
-            next_obs_t = torch.tensor(obs_np, dtype=torch.float32, device=device)
+        next_obs_t = torch.tensor(obs_np, dtype=torch.float32, device=device)
 
         return next_obs_t, obs_np, global_step
 
@@ -131,11 +124,11 @@ class PPOBaseTrainer(Trainer):
         cfg = self.config.trainer
         steps_per_env = self.steps_per_env
         device = self.device
-        return_normalizer = self.return_normalizer
+        return_normalizer = self.model.return_normalizer
 
         val_2d = values.reshape(steps_per_env, cfg.num_envs)
         if return_normalizer is not None and cfg.return_scale_only:
-            std = return_normalizer.get_std()
+            std = self.model.return_normalizer.get_std()
             val_2d_gae = val_2d * std
             next_val_gae = next_val * std
         else:
@@ -162,10 +155,10 @@ class PPOBaseTrainer(Trainer):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Update return RMS and return (b_ret, b_adv)."""
         
-        if self.return_normalizer is not None:
+        if self.model.return_normalizer is not None:
             ret_np = ret_unnorm.detach().cpu().numpy()
-            self.return_normalizer.update(ret_np)
-            ret_scaled = self.return_normalizer.scale_only(ret_np) if self.config.trainer.return_scale_only else self.return_normalizer.normalize(ret_np)
+            self.model.return_normalizer.update(ret_np)
+            ret_scaled = self.model.return_normalizer.scale_only(ret_np) if self.config.trainer.return_scale_only else self.model.return_normalizer.normalize(ret_np)
             b_ret = torch.tensor(ret_scaled, dtype=torch.float32, device=self.device) if isinstance(ret_scaled, np.ndarray) else ret_scaled.float().to(self.device)
         else:
             b_ret = ret_unnorm
@@ -184,8 +177,8 @@ class PPOBaseTrainer(Trainer):
     ) -> float:
 
         with torch.no_grad():
-            if self.return_normalizer is not None and self.config.trainer.return_scale_only:
-                std = self.return_normalizer.get_std()
+            if self.model.return_normalizer is not None and self.config.trainer.return_scale_only:
+                std = self.model.return_normalizer.get_std()
                 v_pred_reward = b_val * std
             else:
                 v_pred_reward = b_val
@@ -298,18 +291,19 @@ class PPOBaseTrainer(Trainer):
             "diagnostics/clipfrac": np.mean(clipfracs) if clipfracs else np.nan,
             "diagnostics/explained_variance": explained_var,
         }
-        if eval_mean != float("nan"):
+        if not np.isnan(eval_mean):
             log_dict["charts/eval_return_mean"] = eval_mean
             log_dict["charts/eval_return_std"] = eval_std
-            log_dict["charts/eval_success_rate"] = success_rate
-            log_dict["charts/eval_collision_rate"] = collision_rate
-            log_dict["charts/eval_timeout_rate"] = timeout_rate
-        if self.obs_normalizer is not None:
-            log_dict["diagnostics/obs_mean_norm"] = self.obs_normalizer.get_mean()
-            log_dict["diagnostics/obs_std_norm"] = self.obs_normalizer.get_std()
-        if self.return_normalizer is not None:
-            log_dict["diagnostics/ret_mean_norm"] = self.return_normalizer.get_mean()
-            log_dict["diagnostics/ret_std_norm"] = self.return_normalizer.get_std()
+            if success_rate + collision_rate + timeout_rate > 0:
+                log_dict["charts/eval_success_rate"] = success_rate
+                log_dict["charts/eval_collision_rate"] = collision_rate
+                log_dict["charts/eval_timeout_rate"] = timeout_rate
+        if self.model.obs_normalizer is not None:
+            log_dict["diagnostics/obs_mean_norm"] = self.model.obs_normalizer.get_mean()
+            log_dict["diagnostics/obs_std_norm"] = self.model.obs_normalizer.get_std()
+        if self.model.return_normalizer is not None:
+            log_dict["diagnostics/ret_mean_norm"] = self.model.return_normalizer.get_mean()
+            log_dict["diagnostics/ret_std_norm"] = self.model.return_normalizer.get_std()
         
         wandb.log(log_dict, step=global_step)
 
@@ -345,7 +339,10 @@ class PPOBaseTrainer(Trainer):
             self._update_ent_coef(update)
             
             if self.use_cirriculum:
-                cirriculum_updates = self.num_updates // ((20-self.initial_human_num)/self.increase_human_num + 1)
+                num_curriculum_stages = (
+                    (self.max_human_num - self.initial_human_num) / self.increase_human_num + 1
+                )
+                cirriculum_updates = max(1, int(self.num_updates // num_curriculum_stages))
                 if update % cirriculum_updates == 0:
                     self.reset_env()
             
@@ -375,11 +372,12 @@ class PPOBaseTrainer(Trainer):
             do_eval = update % self.config.trainer.eval_interval == 0 or update == 1 or update == self.num_updates
             if do_eval:
                 eval_mean, eval_std, success_rate, collision_rate, timeout_rate = self.eval()
+                remain_time = (self.num_updates - update) * ((time.time() - start_time) / 3600) / update if update > 0 else None
                 print(
                     f"update {update:4d}/{self.num_updates} | steps {global_step:8d} | "
                     f"eval {eval_mean:8.2f}±{eval_std:5.2f} | "
                     f"success {success_rate:.3f} | collision {collision_rate:.3f} | timeout {timeout_rate:.3f} | "
-                    f"kl {np.mean(approx_kls):.4f} | clip {np.mean(clipfracs):.3f} | sps {sps} | time {(time.time() - start_time) / 3600:.2f}hrs"
+                    f"kl {np.mean(approx_kls):.4f} | clip {np.mean(clipfracs):.3f} | sps {sps} | time {(time.time() - start_time) / 3600:.2f}hrs | remain {remain_time:.2f}hrs"
                 )
                 self.save_ckpt(self.save_dir, step=global_step, performance=eval_mean, max_keep=10)
             else:

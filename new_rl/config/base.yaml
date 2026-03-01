@@ -4,6 +4,7 @@ device: "cuda"
 
 wandb_entity: daiyp_umich
 wandb_project: crowdsim
+wandb_interval: 10
 run_name: null
 save_dir: runs
 overwrite: false

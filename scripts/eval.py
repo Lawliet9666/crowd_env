@@ -1,7 +1,7 @@
 from omegaconf import DictConfig, OmegaConf
+from hydra.utils import instantiate
 import torch
 import os
-from new_rl.utils import RunningMeanStd
 from new_rl.utils import map_action_to_env
 import numpy as np
 from functools import partial
@@ -12,12 +12,26 @@ import gymnasium as gym
 
 
 class Evaluator:
-    def __init__(self, save_dir: str):
-        self.save_dir = save_dir
-        self.config = OmegaConf.load(os.path.join(save_dir, "config.yaml"))
-        self.device = torch.device(self.config.device if torch.cuda.is_available() else "cpu")
-        self.prepare_model()
+    """Evaluator takes only config. Use Evaluator.from_run_dir(save_dir) for loading from a trained run."""
+
+    def __init__(self, config: DictConfig):
+        self.config = config
+        self.save_dir = config.get("eval_save_dir", None)
+        if self.save_dir is None:
+            raise ValueError(
+                "config must have eval_save_dir (directory containing checkpoints). "
+                "Use Evaluator.from_run_dir(save_dir) when loading from a trained run."
+            )
+        self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
+        self.model = instantiate(self.config.model, _convert_="none")
         self.prepare_env()
+
+    @classmethod
+    def from_run_dir(cls, save_dir: str) -> "Evaluator":
+        """Load config from a run directory and create Evaluator. For evaluating trained checkpoints."""
+        config = OmegaConf.load(os.path.join(save_dir, "config.yaml"))
+        config.eval_save_dir = save_dir
+        return cls(config)
         
     def prepare_env(self):
         if self.config.env.type == "mujoco":
@@ -47,40 +61,23 @@ class Evaluator:
     
             self.make_env_fn = partial(make_env_fn, self.crowd_sim_config, self.config.env.env_id)
        
-        
-    def prepare_model(self):
-        if self.config.model.type == "ppo_base":
-            from new_rl.model.ppo_base import ActorCritic
-            self.model = ActorCritic(
-                obs_dim=self.config.env.obs_dim,
-                act_dim=self.config.env.act_dim,
-                actor_mlp_config=self.config.model.actor.mlp,
-                critic_mlp_config=self.config.model.critic.mlp)
-        else:
-            raise ValueError(f"Model type {self.config.model.type} not supported")
 
     def evaluate_one_ckpt(self, ckpt_path: str):
         ckpt = torch.load(ckpt_path, weights_only=False)
-        self.model.load_state_dict(ckpt["model"])
+        self.model.load_state_dict(ckpt["model"], strict=False)
         self.model.eval()
         self.model.to(self.device)
-        
-        obs_normalizer = ckpt.get("obs_normalizer", None)
-        return_normalizer = ckpt.get("return_normalizer", None)
-        if obs_normalizer is not None:
-            self.obs_normalizer = RunningMeanStd(shape=(self.config.env.obs_dim,))
-            self.obs_normalizer.mean = obs_normalizer["mean"]
-            self.obs_normalizer.var = obs_normalizer["var"]
-            self.obs_normalizer.count = obs_normalizer["count"]
-        else:
-            self.obs_normalizer = None
-        if return_normalizer is not None:
-            self.return_normalizer = RunningMeanStd(shape=())
-            self.return_normalizer.mean = return_normalizer["mean"]
-            self.return_normalizer.var = return_normalizer["var"]
-            self.return_normalizer.count = return_normalizer["count"]
-        else:
-            self.return_normalizer = None
+        # Backward compat: load separate normalizers from old checkpoint format
+        if "obs_normalizer" in ckpt and self.model.obs_normalizer is not None:
+            self.model.obs_normalizer.load_state_dict(
+                {k: torch.as_tensor(v) for k, v in ckpt["obs_normalizer"].items()},
+                strict=False,
+            )
+        if "return_normalizer" in ckpt and self.model.return_normalizer is not None:
+            self.model.return_normalizer.load_state_dict(
+                {k: torch.as_tensor(v) for k, v in ckpt["return_normalizer"].items()},
+                strict=False,
+            )
         mean_return, std_return, success_rate, collision_rate, timeout_rate = self.evaluate()
         return mean_return, std_return, success_rate, collision_rate, timeout_rate
     
@@ -135,53 +132,7 @@ class Evaluator:
         with open(os.path.join(self.save_dir, "eval_results.json"), "w") as f:
             json.dump(results, f, indent=4)
         return results
-    
-    # def small_test(self, episodes: int = 20, seed: int = 1000):
-    #     """Evaluate policy deterministically (mean action) in a single env."""
-    #     self.model.eval()
-    #     env = self.make_env_fn()()
-    #     action_space = env.action_space
-    #     action_low = np.asarray(action_space.low, dtype=np.float32)
-    #     action_high = np.asarray(action_space.high, dtype=np.float32)
-    #     returns = []
-    #     success_count = 0
-    #     collision_count = 0
-    #     timeout_count = 0
-    #     for ep in range(episodes):
-    #         obs_np, _ = env.reset(seed=seed + ep)
-    #         done = False
-    #         total = 0.0
-    #         while not done:
-    #             if self.obs_normalizer is not None:
-    #                 obs_norm = self.obs_normalizer.normalize(obs_np)
-    #                 if isinstance(obs_norm, torch.Tensor):
-    #                     obs_t = obs_norm.float().to(self.device).unsqueeze(0)
-    #                 else:
-    #                     obs_t = torch.tensor(obs_norm, dtype=torch.float32, device=self.device).unsqueeze(0)
-    #             else:
-    #                 obs_t = torch.tensor(obs_np, dtype=torch.float32, device=self.device).unsqueeze(0)
 
-    #             with torch.no_grad():
-    #                 action = self.model.actor.net(obs_t).squeeze(0)  # deterministic (mean)
-
-    #             action_np = map_action_to_env(
-    #                 action.cpu().numpy(),
-    #                 action_low,
-    #                 action_high,
-    #                 self.config.trainer.action_bound_method,
-    #             )
-
-    #             obs_np, r, term, trunc, info = env.step(action_np)
-    #             done = term or trunc
-    #             total += float(r)
-    #         returns.append(total)
-    #         success_count += int(info.get("is_success", False))
-    #         collision_count += int(info.get("is_collision", False))
-    #         timeout_count += int(info.get("is_timeout", False))
-    #     env.close()
-    #     return float(np.mean(returns)), float(np.std(returns)), success_count/episodes, collision_count/episodes, timeout_count/episodes
-    
- 
     def evaluate(self):
         """Evaluate policy deterministically (mean action) in a single env."""
 
@@ -202,17 +153,9 @@ class Evaluator:
                 done = False
                 total = 0.0
                 while not done:
-                    if self.obs_normalizer is not None:
-                        obs_norm = self.obs_normalizer.normalize(obs_np)
-                        if isinstance(obs_norm, torch.Tensor):
-                            obs_t = obs_norm.float().to(self.device).unsqueeze(0)
-                        else:
-                            obs_t = torch.tensor(obs_norm, dtype=torch.float32, device=self.device).unsqueeze(0)
-                    else:
-                        obs_t = torch.tensor(obs_np, dtype=torch.float32, device=self.device).unsqueeze(0)
-
+                    obs_t = torch.tensor(obs_np, dtype=torch.float32, device=self.device).unsqueeze(0)
                     with torch.no_grad():
-                        action = self.model.actor.net(obs_t).squeeze(0)  # deterministic (mean)
+                        action = self.model.get_action_deterministic(obs_t).squeeze(0)
 
                     action_np = map_action_to_env(
                         action.cpu().numpy(),
@@ -239,7 +182,7 @@ class Evaluator:
 if __name__ == "__main__":
     import argparse
     args = argparse.ArgumentParser()
-    args.add_argument("--save-dir", type=str, required=True)
+    args.add_argument("--save-dir", type=str, required=True, help="Run directory containing config.yaml and ckpt_*.pt")
     args = args.parse_args()
-    evaluator = Evaluator(args.save_dir)
+    evaluator = Evaluator.from_run_dir(args.save_dir)
     evaluator.eval_all_ckpts()

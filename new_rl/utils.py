@@ -15,91 +15,100 @@ def set_seed(seed: int, deterministic: bool = False):
 
 
 def MLP(
-    in_dim: int, out_dim: int, 
-    hidden_sizes: tuple[int, ...] = (64, 64), 
-    act: str = "relu", 
+    in_dim: int, out_dim: int,
+    hidden_sizes: tuple[int, ...] = (64, 64),
+    act: str = "relu",
     add_last_act: bool = False
 ) -> nn.Sequential:
+    if len(hidden_sizes) == 0:
+        raise ValueError("hidden_sizes must contain at least one layer size")
+
     if act == "relu":
-        act = nn.ReLU()
+        act_cls = nn.ReLU
     elif act == "tanh":
-        act = nn.Tanh()
+        act_cls = nn.Tanh
     elif act == "silu":
-        act = nn.SiLU()
+        act_cls = nn.SiLU
     else:
         raise ValueError(f"Invalid activation function: {act}")
+
     modules = []
     for i in range(len(hidden_sizes)):
         if i == 0:
             modules.append(nn.Linear(in_dim, hidden_sizes[i]))
         else:
-            modules.append(nn.Linear(hidden_sizes[i-1], hidden_sizes[i]))
-        modules.append(act)
-    modules.append(nn.Linear(hidden_sizes[-1], out_dim)) 
+            modules.append(nn.Linear(hidden_sizes[i - 1], hidden_sizes[i]))
+        # Create a fresh module instance per layer.
+        modules.append(act_cls())
+    modules.append(nn.Linear(hidden_sizes[-1], out_dim))
     if add_last_act:
-        modules.append(act)
+        modules.append(act_cls())
     return nn.Sequential(*modules)
 
 
 
-
-class RunningMeanStd:
-    """Welford online algorithm for running mean and variance."""
+class RunningMeanStd(nn.Module):
+    """Welford online algorithm for running mean and variance.
+    Uses register_buffer for mean/var/count — non-trainable, updated on the fly, moves with model.
+    """
 
     def __init__(self, shape: tuple[int, ...] = (), eps: float = 1e-4):
-        self.mean = np.zeros(shape, dtype=np.float64)
-        self.var = np.ones(shape, dtype=np.float64)
-        self.count = eps
+        super().__init__()
+        self.register_buffer("mean", torch.zeros(shape, dtype=torch.float64))
+        self.register_buffer("var", torch.ones(shape, dtype=torch.float64))
+        self.register_buffer("count", torch.tensor(eps, dtype=torch.float64))
 
-    def update(self, x: np.ndarray) -> None:
-        batch_mean = x.mean(axis=0)
-        batch_var = x.var(axis=0)
+    @torch.no_grad()
+    def update(self, x: torch.Tensor | np.ndarray) -> None:
+        """Update running stats from batch. x: (batch, *shape). Accepts numpy or tensor."""
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x).to(device=self.mean.device, dtype=torch.float64)
+        else:
+            x = x.double().to(device=self.mean.device)
+        batch_mean = x.mean(dim=0)
+        batch_var = x.double().var(dim=0, unbiased=False)
         batch_count = x.shape[0]
         self._update_from_moments(batch_mean, batch_var, batch_count)
 
-    def _update_from_moments(self, batch_mean, batch_var, batch_count):
+    def _update_from_moments(self, batch_mean: torch.Tensor, batch_var: torch.Tensor, batch_count: int):
         delta = batch_mean - self.mean
         tot_count = self.count + batch_count
         new_mean = self.mean + delta * batch_count / tot_count
         m_a = self.var * self.count
         m_b = batch_var * batch_count
-        M2 = m_a + m_b + delta ** 2 * self.count * batch_count / tot_count
-        self.mean = new_mean
-        self.var = M2 / tot_count
-        self.count = tot_count
+        M2 = m_a + m_b + delta**2 * self.count * batch_count / tot_count
+        self.mean.copy_(new_mean)
+        self.var.copy_(M2 / tot_count)
+        self.count.copy_(tot_count)
 
-    def normalize(self, x: np.ndarray, clip: float = 10.0) -> np.ndarray:
+    def normalize(self, x: torch.Tensor | np.ndarray, clip: float = 10.0) -> torch.Tensor:
         """Full normalize: (x - mean) / std, clipped."""
-        return np.clip((x - self.mean) / (np.sqrt(self.var) + 1e-8), -clip, clip)
-
-    def scale_only(self, x: np.ndarray) -> np.ndarray:
-        """Tianshou-style: divide by std only (no mean subtraction)."""
-        return x / (np.sqrt(self.var) + 1e-8)
-
-    # Torch variants (for tensors on device)
-    def normalize_th(self, x: torch.Tensor, clip: float = 10.0) -> torch.Tensor:
-        mean = torch.tensor(self.mean, dtype=x.dtype, device=x.device)
-        std = torch.tensor(np.sqrt(self.var) + 1e-8, dtype=x.dtype, device=x.device)
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x).to(device=self.mean.device)
+        else:
+            x = x.to(device=self.mean.device)
+        mean = self.mean.to(x.dtype)
+        std = (self.var.sqrt() + 1e-8).to(x.dtype)
         return torch.clamp((x - mean) / std, -clip, clip)
 
-    def scale_only_th(self, x: torch.Tensor) -> torch.Tensor:
-        std = torch.tensor(np.sqrt(self.var) + 1e-8, dtype=x.dtype, device=x.device)
+    def scale_only(self, x: torch.Tensor | np.ndarray) -> torch.Tensor:
+        """Tianshou-style: divide by std only (no mean subtraction)."""
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x).to(device=self.mean.device)
+        else:
+            x = x.to(device=self.mean.device)
+        std = (self.var.sqrt() + 1e-8).to(x.dtype)
         return x / std
 
     def get_std(self) -> float:
-        """Return scalar std for logging (handles numpy or torch)."""
-        var = self.var
-        if hasattr(var, "cpu"):
-            std = var.sqrt() + 1e-8
-            return float(std.mean() if std.numel() > 1 else std.item())
-        return float(np.mean(np.sqrt(np.asarray(var)) + 1e-8))
+        """Return scalar std for logging."""
+        std = self.var.sqrt() + 1e-8
+        return float(std.mean() if std.numel() > 1 else std.item())
 
     def get_mean(self) -> float:
-        """Return scalar mean for logging (handles numpy or torch)."""
+        """Return scalar mean for logging."""
         m = self.mean
-        if hasattr(m, "cpu"):
-            return float(m.mean() if m.numel() > 1 else m.item())
-        return float(np.mean(m))
+        return float(m.mean() if m.numel() > 1 else m.item())
 
 
 def map_action_to_env(
@@ -108,13 +117,20 @@ def map_action_to_env(
     action_high: np.ndarray,
     action_bound_method: str,
 ) -> np.ndarray:
+    """Bound and scale policy output from [-1, 1] to environment action range."""
     if isinstance(action, torch.Tensor):
         action = action.detach().cpu().numpy()
-    """Bound and scale policy output to env action range."""
+
     if action_bound_method == "env_clip":
         action = np.clip(action, -1.0, 1.0)
-    if action_bound_method == "env_tanh":
+    elif action_bound_method == "env_tanh":
         action = np.tanh(action)
+    else:
+        raise ValueError(
+            f"Unsupported action_bound_method '{action_bound_method}'. "
+            "Expected one of {'env_clip', 'env_tanh'}."
+        )
+
     action = action_low + (action_high - action_low) * (action + 1.0) / 2.0
     return action
 
@@ -125,15 +141,23 @@ def map_action_to_env(
 # ---------------------------------------------------------------------------
 @torch.no_grad()
 def init_weights(model: nn.Module) -> None:
+    def _last_linear(module: nn.Module) -> nn.Linear | None:
+        linears = [m for m in module.modules() if isinstance(m, nn.Linear)]
+        return linears[-1] if linears else None
+
     for m in model.modules():
         if isinstance(m, nn.Linear):
             nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
             nn.init.zeros_(m.bias)
+
     # Small last layer for near-zero initial actions
     if hasattr(model, "actor"):
-        last_actor_layer = list(model.actor.net.children())[-1]
-        last_actor_layer.weight.data *= 0.01
+        last_actor_layer = _last_linear(model.actor.net)
+        if last_actor_layer is not None:
+            last_actor_layer.weight.data *= 0.01
+
     # Critic last layer: gain=1
     if hasattr(model, "critic"):
-        last_critic_layer = list(model.critic.net.children())[-1]
-        nn.init.orthogonal_(last_critic_layer.weight, gain=1.0)
+        last_critic_layer = _last_linear(model.critic.net)
+        if last_critic_layer is not None:
+            nn.init.orthogonal_(last_critic_layer.weight, gain=1.0)

@@ -4,3 +4,5 @@ defaults:
   - model: ppo_base
   - trainer: ppo
   - _self_
+
+wandb_interval: 100

@@ -2,5 +2,8 @@ defaults:
   - base
   - env: mujoco
   - model: ppo_base
-  - trainer: ppo
+  - trainer: ppo_mujoco
   - _self_
+
+
+wandb_interval: 1
