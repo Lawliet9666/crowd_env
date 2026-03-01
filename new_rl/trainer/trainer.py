@@ -16,7 +16,6 @@ from new_rl.utils import RunningMeanStd
 import wandb
 from new_rl.utils import map_action_to_env
 import numpy as np
-from functools import partial
 import gymnasium as gym
 import shutil
 
@@ -45,6 +44,13 @@ class Trainer:
         run_name = self.config.run_name + "-" + self.config.model.type +  \
             f"-bs{self.batch_size}-ep{self.config.trainer.update_epochs}-lr{self.config.trainer.lr:.1e}-{self.config.trainer.lr_schedule[:4]}-vf{self.config.trainer.vf_coef}-{self.config.trainer.action_bound_method}"
         
+        if self.config.trainer.use_cirriculum:
+            run_name = "CL-" + run_name
+            self.use_cirriculum = True
+            self.initial_human_num = self.config.trainer.initial_human_num
+            self.human_num = self.initial_human_num
+            self.increase_human_num = self.config.trainer.increase_human_num
+            
         if self.config.trainer.ent_coef > 0:
             run_name += f"-ent{self.config.trainer.ent_coef}"
             if self.config.trainer.ent_coef_decay:
@@ -157,6 +163,9 @@ class Trainer:
             if constant_penalty != self.crowd_sim_config.reward.constant_penalty:
                 print(f"Adjusting constant penalty from default {self.crowd_sim_config.reward.constant_penalty} to {constant_penalty}")
                 self.crowd_sim_config.reward.constant_penalty = constant_penalty
+                
+            if self.config.trainer.use_cirriculum:
+                self.crowd_sim_config.human.num_humans = self.human_num
             
             def make_env_fn(config: CrowdSimConfig, env_name: str):
                 def _init():
@@ -165,9 +174,9 @@ class Trainer:
                     env.reset(seed=self.config.seed)
                     return env
                 return _init
-    
+            print(f"Initializing env with {self.human_num} humans")
             self.train_envs = AsyncVectorEnv([make_env_fn(self.crowd_sim_config, self.config.env.env_id) for _ in range(num_envs)])
-            self.make_env_fn = partial(make_env_fn, self.crowd_sim_config, self.config.env.env_id)
+            self.make_env_fn = make_env_fn
         
 
         self.action_space = self.train_envs.single_action_space
@@ -185,6 +194,19 @@ class Trainer:
         print(f"\tAct dim: {self.act_dim}")
         assert self.obs_dim == self.config.env.obs_dim, "obs_dim mismatch"
         assert self.act_dim == self.config.env.act_dim, "act_dim mismatch"
+        
+    
+    def reset_env(self):
+        # for cirriculum learning, reset the env with different human numbers
+        if not self.use_cirriculum:
+            return
+        if self.human_num >= 20:
+            return
+        self.train_envs.close()
+        self.human_num = min(self.human_num + self.increase_human_num, 20)
+        print(f"Resetting env with {self.human_num} humans")
+        self.crowd_sim_config.human.num_humans = self.human_num
+        self.train_envs = AsyncVectorEnv([self.make_env_fn(self.crowd_sim_config, self.config.env.env_id) for _ in range(self.config.trainer.num_envs)])
 
     def train(self):
         raise NotImplementedError("Training is not implemented yet")
@@ -192,8 +214,8 @@ class Trainer:
     
     def eval(self, episodes: int = 20, seed: int = 1000):
         """Evaluate policy deterministically (mean action) in a single env."""
-
-        env = self.make_env_fn()()
+        self.model.eval()
+        env = self.make_env_fn(self.crowd_sim_config, self.config.env.env_id)()
         returns = []
         success_count = 0
         collision_count = 0

@@ -12,6 +12,7 @@ lr_schedule: "constant"   # linear decay | cosine decay | constant
 clip_coef: 0.2
 vf_coef: 0.5
 ent_coef: 0.02
+ent_coef_min: 0.002
 ent_coef_decay: true
 max_grad_norm: 0.5
 
@@ -33,3 +34,7 @@ recompute_adv: true     # recompute GAE each epoch
 
 eval_interval: 100      
 eval_episodes: 20
+
+use_cirriculum: false
+initial_human_num: 4
+increase_human_num: 4

@@ -31,7 +31,7 @@ class PPOBaseTrainer(Trainer):
     def _update_ent_coef(self, update: int) -> None:
         ent_coef_decay = self.config.trainer.ent_coef_decay
         ent_max = self.config.trainer.ent_coef
-        ent_min = 0.0
+        ent_min = self.config.trainer.ent_coef_min
         if ent_coef_decay:
             progress = update / self.num_updates
             self.ent_coef = ent_max + (ent_min - ent_max) * min(1.0, progress)
@@ -90,23 +90,25 @@ class PPOBaseTrainer(Trainer):
                 finished = [(r, lengths[i]) for i, r in enumerate(returns) if r is not None]
                 if finished:
                     rets, lens = zip(*finished)
-                    wandb.log(
-                        {"train/episodic_return": np.mean(rets), 
-                        "train/episodic_length": np.mean(lens)
-                        },
-                        step=global_step,
-                    )
+                    if global_step % 100 == 0:
+                        wandb.log(
+                            {"train/episodic_return": np.mean(rets), 
+                            "train/episodic_length": np.mean(lens)
+                            },
+                            step=global_step,
+                        )
 
             obs_np = next_obs_np
-            
-        wandb.log(
-            {
-                "train/success_rate": success_count / (success_count + collision_count + timeout_count),
-                "train/collision_rate": collision_count / (success_count + collision_count + timeout_count),
-                "train/timeout_rate": timeout_count / (success_count + collision_count + timeout_count),
-            },
-            step=global_step,
-        )
+        
+        if global_step % 100 == 0:
+            wandb.log(
+                {
+                    "train/success_rate": success_count / (success_count + collision_count + timeout_count),
+                    "train/collision_rate": collision_count / (success_count + collision_count + timeout_count),
+                    "train/timeout_rate": timeout_count / (success_count + collision_count + timeout_count),
+                },
+                step=global_step,
+            )
 
         buffers["global_step"] = global_step
 
@@ -295,18 +297,20 @@ class PPOBaseTrainer(Trainer):
             "diagnostics/approx_kl": np.mean(approx_kls) if approx_kls else np.nan,
             "diagnostics/clipfrac": np.mean(clipfracs) if clipfracs else np.nan,
             "diagnostics/explained_variance": explained_var,
-            "charts/eval_return_mean": eval_mean,
-            "charts/eval_return_std": eval_std,
-            "charts/eval_success_rate": success_rate,
-            "charts/eval_collision_rate": collision_rate,
-            "charts/eval_timeout_rate": timeout_rate,
         }
+        if eval_mean != float("nan"):
+            log_dict["charts/eval_return_mean"] = eval_mean
+            log_dict["charts/eval_return_std"] = eval_std
+            log_dict["charts/eval_success_rate"] = success_rate
+            log_dict["charts/eval_collision_rate"] = collision_rate
+            log_dict["charts/eval_timeout_rate"] = timeout_rate
         if self.obs_normalizer is not None:
             log_dict["diagnostics/obs_mean_norm"] = self.obs_normalizer.get_mean()
             log_dict["diagnostics/obs_std_norm"] = self.obs_normalizer.get_std()
         if self.return_normalizer is not None:
             log_dict["diagnostics/ret_mean_norm"] = self.return_normalizer.get_mean()
             log_dict["diagnostics/ret_std_norm"] = self.return_normalizer.get_std()
+        
         wandb.log(log_dict, step=global_step)
 
     def train(self):        
@@ -339,7 +343,12 @@ class PPOBaseTrainer(Trainer):
         for update in range(1, self.num_updates + 1):
             self._update_lr(update)
             self._update_ent_coef(update)
-
+            
+            if self.use_cirriculum:
+                cirriculum_updates = self.num_updates // ((20-self.initial_human_num)/self.increase_human_num + 1)
+                if update % cirriculum_updates == 0:
+                    self.reset_env()
+            
             self.model.eval()
             next_obs_t, obs_np, global_step = self._collect_rollout(obs_np, action_low, action_high, buffers)
 
