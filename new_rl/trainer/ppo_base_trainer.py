@@ -87,19 +87,13 @@ class PPOBaseTrainer(Trainer):
                 finished = [(r, lengths[i]) for i, r in enumerate(returns) if r is not None]
                 if finished:
                     rets, lens = zip(*finished)
-                    if global_step % self.config.wandb_interval == 0:
-                        wandb.log(
-                            {"train/episodic_return": np.mean(rets), 
-                            "train/episodic_length": np.mean(lens)
-                            },
-                            step=global_step,
-                        )
-
             obs_np = next_obs_np
         
         if global_step % self.config.wandb_interval == 0 and success_count + collision_count + timeout_count > 0:
             wandb.log(
                 {
+                    "train/episodic_return": np.mean(rets), 
+                    "train/episodic_length": np.mean(lens),
                     "train/success_rate": success_count / (success_count + collision_count + timeout_count),
                     "train/collision_rate": collision_count / (success_count + collision_count + timeout_count),
                     "train/timeout_rate": timeout_count / (success_count + collision_count + timeout_count),
