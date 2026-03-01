@@ -45,10 +45,7 @@ class Evaluator:
                 return _thunk
             self.make_env_fn = make_env_fn
         else:
-            import sys
-            sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-            from config.config import Config as CrowdSimConfig
-            from crowd_sim.utils import build_env   
+            from new_rl.env_wrapper.crowdsim import CrowdSimConfig, build_env
             self.crowd_sim_config = CrowdSimConfig()
             # TODO: change config here later
             def make_env_fn(config: CrowdSimConfig, env_name: str):

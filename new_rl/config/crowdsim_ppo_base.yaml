@@ -8,11 +8,11 @@ defaults:
 model:
   actor:
     mlp:
-      act: silu  # silu | tanh | relu
+      act: silu  # important!
 
   critic:
     mlp:
-      act: silu
+      act: silu # important!
 
 
 wandb_interval: 100

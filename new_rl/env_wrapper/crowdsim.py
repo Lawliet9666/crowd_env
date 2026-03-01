@@ -93,14 +93,14 @@ class SocialNavVarNumPloar(SocialNavVarNum):
         return self._preprocess_obs(obs), reward, done, truncated, info
 
 
-def build_env(env_name: str, render_mode: str, config: CrowdSimConfig):
+def build_env(env_name: str, render_mode: str, config: CrowdSimConfig, *args, **kwargs):
     if env_name == "social_nav":
         return SocialNav(render_mode=render_mode, config_file=config)
     if env_name == "social_nav_var_num":
         return SocialNavVarNum(render_mode=render_mode, config_file=config)
     if env_name == "social_nav_var_num_ploar":
-        topk = 5
-        farest_dist = 5
+        topk = kwargs.get("topk", 5)
+        farest_dist = kwargs.get("farest_dist", 5)
         return SocialNavVarNumPloar(
             render_mode=render_mode,
             config_file=config,
