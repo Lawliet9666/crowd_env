@@ -1,6 +1,6 @@
-env_id: "social_nav_var_num"
+env_id: "social_nav_var_num_ploar"
 type: "crowdsim"
-obs_dim: 12
+obs_dim: 23
 act_dim: 2
 
 success_reward: 20

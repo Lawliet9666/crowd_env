@@ -139,13 +139,10 @@ class Trainer:
                 return _thunk
             self.train_envs = SyncVectorEnv([make_env_fn(i) for i in range(num_envs)])
             self.make_env_fn = make_env_fn
-        else:
-            import sys
-            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-            from config.config import Config as CrowdSimConfig
-            from crowd_sim.utils import build_env
+        else:            
+            from new_rl.env_wrapper.crowdsim import CrowdSimConfig, build_env
             self.crowd_sim_config = CrowdSimConfig()
-            
+            self.crowd_sim_config.env.max_obstacles_obs = 20
             success_reward = self.config.env.success_reward
             collision_penalty = self.config.env.collision_penalty
             potential_factor = self.config.env.potential_factor

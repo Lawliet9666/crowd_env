@@ -5,4 +5,14 @@ defaults:
   - trainer: ppo
   - _self_
 
+model:
+  actor:
+    mlp:
+      act: silu  # silu | tanh | relu
+
+  critic:
+    mlp:
+      act: silu
+
+
 wandb_interval: 100
