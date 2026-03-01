@@ -49,8 +49,16 @@ class Trainer:
             run_name += f"-ent{self.config.trainer.ent_coef}"
             if self.config.trainer.ent_coef_decay:
                 run_name += "decay"
+        if not self.config.trainer.use_adv_norm:
+            run_name += "-no-advnorm"
+        if not self.config.trainer.use_obs_norm:
+            run_name += "-no-obsnorm"
+        if not self.config.trainer.use_return_norm:
+            run_name += "-no-retnorm"
         if not self.config.trainer.return_scale_only:
             run_name += "-rss"
+        if not self.config.trainer.recompute_adv:
+            run_name += "-no-recomp"
         
         if self.config.env.type == "crowdsim":
             if self.config.env.success_reward != 20:
@@ -76,6 +84,8 @@ class Trainer:
         
         with open(os.path.join(self.save_dir, "config.yaml"), "w") as f:
             OmegaConf.save(self.config, f)
+        
+        print("config: ", self.config)
             
         wandb.init(
             project=self.config.wandb_project,

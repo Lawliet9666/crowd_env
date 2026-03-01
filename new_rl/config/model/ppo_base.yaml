@@ -2,9 +2,9 @@ type: "ppo_base"
 actor:
   mlp:
     hidden_sizes: [64, 64]
-    act: relu # tanh / relu / silu
+    act: tanh # tanh / relu / silu
 
 critic:
   mlp:
     hidden_sizes: [64, 64]
-    act: relu # tanh / relu / silu
+    act: tanh # tanh / relu / silu
