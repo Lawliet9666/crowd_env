@@ -183,12 +183,12 @@ class SACBaseTrainer(Trainer):
         # total_steps = total transitions (same meaning as PPO)
         num_updates = int(cfg.total_steps) // num_envs
 
-        # episodic stats (accumulate across envs)
         success_count = 0
         collision_count = 0
         timeout_count = 0
-        r_float = 0.0
-        l_float = 0.0
+        ep_return_sum = 0.0
+        ep_length_sum = 0.0
+        ep_count = 0
 
         pbar = tqdm(total=num_updates, desc="SAC")
 
@@ -227,43 +227,31 @@ class SACBaseTrainer(Trainer):
 
             # store transition (done is correct terminal flag)
             rb.add_batch(o, a_env, r, o2, done)
-
-            # -------- logging episodic stats (supports vector env) --------
-            # Many Gymnasium vector wrappers put episode info in info["episode"] as arrays.
-            if isinstance(info, dict) and "episode" in info:
-                ep = info["episode"]
-                # these are often vectors; take mean for logging
-                er = np.asarray(ep.get("r", 0.0), dtype=np.float32).reshape(-1)
-                el = np.asarray(ep.get("l", 0.0), dtype=np.float32).reshape(-1)
-                if er.size > 0:
-                    r_float = float(er.mean())
-                if el.size > 0:
-                    l_float = float(el.mean())
-
-                # optional flags
-                if "is_success" in ep:
-                    success_count += int(np.asarray(ep["is_success"]).sum())
-                if "is_collision" in ep:
-                    collision_count += int(np.asarray(ep["is_collision"]).sum())
-                if "is_timeout" in ep:
-                    timeout_count += int(np.asarray(ep["is_timeout"]).sum())
+            
+            if "episode" in info:
+                returns = info.get("episode", {}).get("r", [])
+                lengths = info.get("episode", {}).get("l", [])
+                success_count += np.sum(info.get("is_success", 0))
+                collision_count += np.sum(info.get("is_collision", 0))
+                timeout_count += np.sum(info.get("is_timeout", 0))
+                finished = [(r, lengths[i]) for i, r in enumerate(returns) if r is not None]
+                if finished:
+                    rets, lens = zip(*finished)
+                    ep_return_sum += float(np.sum(rets))
+                    ep_length_sum += float(np.sum(lens))
+                    ep_count += len(rets)
 
             if global_step % self.config.wandb_interval == 0:
                 wandb.log(
-                    {"train/episodic_return": r_float, "train/episodic_length": l_float},
+                    {
+                        "train/episodic_return": ep_return_sum / ep_count, 
+                        "train/episodic_length": ep_length_sum / ep_count,
+                        "train/success_rate": success_count / (success_count + collision_count + timeout_count),
+                        "train/collision_rate": collision_count / (success_count + collision_count + timeout_count),
+                        "train/timeout_rate": timeout_count / (success_count + collision_count + timeout_count),
+                    },
                     step=global_step,
                 )
-                total_ep = success_count + collision_count + timeout_count
-                if total_ep > 0:
-                    wandb.log(
-                        {
-                            "train/success_rate": success_count / total_ep,
-                            "train/collision_rate": collision_count / total_ep,
-                            "train/timeout_rate": timeout_count / total_ep,
-                        },
-                        step=global_step,
-                    )
-                    success_count = collision_count = timeout_count = 0
 
             # advance obs
             o = o2

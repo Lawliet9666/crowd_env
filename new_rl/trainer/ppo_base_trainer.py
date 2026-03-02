@@ -78,6 +78,7 @@ class PPOBaseTrainer(Trainer):
             buffers["rew_buf"][step] = torch.tensor(rewards, dtype=torch.float32, device=device)
             buffers["done_buf"][step] = torch.tensor(dones, dtype=torch.float32, device=device)
             buffers["val_buf"][step] = value
+            obs_np = next_obs_np
 
             if "episode" in infos:
                 returns = infos.get("episode", {}).get("r", [])
@@ -88,7 +89,7 @@ class PPOBaseTrainer(Trainer):
                 finished = [(r, lengths[i]) for i, r in enumerate(returns) if r is not None]
                 if finished:
                     rets, lens = zip(*finished)
-            obs_np = next_obs_np
+            
         
         if global_step % (self.config.wandb_interval*cfg.num_envs) == 0:
             wandb.log(
