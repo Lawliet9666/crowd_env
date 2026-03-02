@@ -1,5 +1,8 @@
 from omegaconf import OmegaConf
 from hydra.utils import instantiate
+
+# Register math resolver (needed for configs with e.g. obs_dim: ${math:3+${env.topk}*4})
+OmegaConf.register_new_resolver("math", lambda expr: eval(str(expr)), replace=True)
 import torch
 import os
 from new_rl.utils import map_action_to_env

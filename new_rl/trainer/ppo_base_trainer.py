@@ -333,7 +333,7 @@ class PPOBaseTrainer(Trainer):
             self._update_lr(update)
             self._update_ent_coef(update)
             
-            if self.use_cirriculum:
+            if self.use_curriculum:
                 num_curriculum_stages = (
                     (self.max_human_num - self.initial_human_num) / self.increase_human_num + 1
                 )

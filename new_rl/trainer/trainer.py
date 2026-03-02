@@ -51,13 +51,13 @@ class Trainer:
         self.human_num = self.config.trainer.max_human_num
         if self._get_curriculum_enabled():
             run_name = "CL-" + run_name
-            self.use_cirriculum = True
+            self.use_curriculum = True
             self.initial_human_num = self.config.trainer.initial_human_num
             self.human_num = self.initial_human_num
             self.increase_human_num = self.config.trainer.increase_human_num
             self.max_human_num = self.config.trainer.max_human_num
         else:
-            self.use_cirriculum = False
+            self.use_curriculum = False
         if self.config.trainer.ent_coef > 0:
             run_name += f"-ent{self.config.trainer.ent_coef}"
             if self.config.trainer.ent_coef_decay:
@@ -214,7 +214,7 @@ class Trainer:
     
     def reset_env(self):
         # for cirriculum learning, reset the env with different human numbers
-        if not self.use_cirriculum:
+        if not self.use_curriculum:
             return
         if self.human_num >= self.max_human_num:
             return
@@ -284,7 +284,7 @@ class Trainer:
             "model": self.model.state_dict(),
             "step": step,
         }
-        if self.use_cirriculum:
+        if self.use_curriculum:
             if self.human_num < self.max_human_num:
                 return 
         torch.save(ckpt, path)
