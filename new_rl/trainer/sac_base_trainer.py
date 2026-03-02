@@ -110,11 +110,6 @@ class SACBaseTrainer(Trainer):
             run_name += "-auto"
         run_name += f"-{t.action_bound_method}"
         
-        if t.use_init_weights:
-            run_name += "-iw"
-        else:
-            run_name += "-noiw"
-
         self.human_num = t.max_human_num
         self.run_name = run_name
         self.save_dir = os.path.join(self.config.save_dir, self.run_name)

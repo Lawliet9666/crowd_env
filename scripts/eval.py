@@ -204,3 +204,5 @@ if __name__ == "__main__":
     args = args.parse_args()
     evaluator = Evaluator(save_dir=args.save_dir, use_all_obs=args.use_all_obs, visualize=args.visualize)
     evaluator.eval_all_ckpts()
+    
+    # python scripts/eval.py --use-all-obs --save-dir 
