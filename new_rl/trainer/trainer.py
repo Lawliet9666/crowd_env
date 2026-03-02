@@ -23,7 +23,7 @@ class Trainer:
     def __init__(self, config: DictConfig):
         self.config = config
         set_seed(config.seed)        
-        self.device = torch.device(self.config.device if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         self.steps_per_env = self.config.trainer.batch_size // self.config.trainer.num_envs
         self.batch_size = self.config.trainer.batch_size

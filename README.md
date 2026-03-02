@@ -34,14 +34,16 @@ Use large batch_size (i.e.g rollout) and minibatch_size
 
 Set small alpha (e.g., 0.001 or auto)
 
-| Total Steps | Batch size | update_step | alpha | best success| 
-|:-:|:-:|:-:|:-:|:-:|
-| 1 M | 256 | 2 | 0.001 | 57 % | 
-| 1 M | 256 | 2 | auto | 61 % | 
-| 2 M | 256 | 2 | 0.001 | 78.6% | 
-| 2 M | 256 | 2 | auto | 77 % | 
-| 2.5M | 256 | 2 | 0.001 | 80.6% | 
-| 2.5M | 256 | 2 | auto | 78% |
+| Total Steps | Batch size | alpha | best success| 
+|:-:|:-:|:-:|:-:|
+| 1 M | 256 | 0.001 | 57 % | 
+| 1 M | 256 | auto | 61 % | 
+| 2 M | 256 | 0.001 | 78.6% | 
+| 2 M | 256 | auto | 77 % | 
+| 2.5M | 256 | 0.001 | 80.6% | 
+| 2.5M | 256 |  auto | 78% |
+| 10M | 256 |  0.001 |  | 
+| 10M | 256 | auto | |
 
 
 1M-2M should be enough for your experiment. SAC 1M takes 2 hours.

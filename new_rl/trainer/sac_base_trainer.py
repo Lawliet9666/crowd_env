@@ -167,7 +167,7 @@ class SACBaseTrainer(Trainer):
         def current_alpha() -> torch.Tensor:
             if cfg.auto_alpha:
                 return log_alpha.exp()
-            return torch.tensor(cfg.alpha, device=self.device)
+            return torch.tensor(float(cfg.alpha), device=self.device)
 
         # reset: obs (num_envs, obs_dim)
         o, info = self.train_envs.reset(seed=self.config.seed)
