@@ -32,8 +32,9 @@ class PPOBaseTrainer(Trainer):
         ent_coef_decay = self.config.trainer.ent_coef_decay
         ent_max = self.config.trainer.ent_coef
         ent_min = self.config.trainer.ent_coef_min
+        max_coef_decay_steps = min (2e7 // self.config.trainer.batch_size, self.num_updates) # otherwise entropy explode
         if ent_coef_decay:
-            progress = update / self.num_updates
+            progress = update / max_coef_decay_steps
             self.ent_coef = ent_max + (ent_min - ent_max) * min(1.0, progress)
         else:
             self.ent_coef = ent_max
@@ -89,7 +90,7 @@ class PPOBaseTrainer(Trainer):
                     rets, lens = zip(*finished)
             obs_np = next_obs_np
         
-        if global_step % self.config.wandb_interval == 0 and success_count + collision_count + timeout_count > 0:
+        if global_step % (self.config.wandb_interval*cfg.num_envs) == 0:
             wandb.log(
                 {
                     "train/episodic_return": np.mean(rets), 

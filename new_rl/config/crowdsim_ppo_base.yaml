@@ -15,4 +15,4 @@ model:
       act: silu # important!
 
 
-wandb_interval: 100
+wandb_interval: 10

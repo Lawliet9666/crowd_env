@@ -1,0 +1,21 @@
+defaults:
+  - base
+  - env: crowdsim
+  - model: sac_base
+  - trainer: sac
+  - _self_
+
+model:
+  actor:
+    mlp:
+      act: relu
+  critic:
+    mlp:
+      act: relu
+
+
+wandb_interval: 1000
+
+trainer:
+  total_steps: 10000000
+  eval_interval: 10000

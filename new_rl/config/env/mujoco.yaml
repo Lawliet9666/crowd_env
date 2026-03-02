@@ -2,3 +2,6 @@ env_id: "HalfCheetah-v4"
 type: "mujoco"
 obs_dim: 17
 act_dim: 6
+
+act_low: [-1, -1, -1, -1, -1, -1]
+act_high: [1, 1, 1, 1, 1, 1]

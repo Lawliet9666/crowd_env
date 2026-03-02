@@ -1,0 +1,32 @@
+total_steps: 10000000
+start_timesteps: 10000
+replay_buffer_size: 1000000
+batch_size: 256
+num_envs: 1
+update_per_step: 1
+# PPO-compat keys (unused by SAC, required by base Trainer)
+minibatch_size: 256
+update_epochs: 1
+
+gamma: 0.99
+tau: 0.005
+actor_lr: 1e-3
+critic_lr: 1e-3
+
+alpha: 0.2
+auto_alpha: false
+alpha_lr: 3e-4
+target_entropy: null   # null = -act_dim
+
+# action will always do scaling
+action_bound_method: "model_tanh"   # model_clip | model_tanh | env_clip | env_tanh
+
+eval_interval: 10000
+eval_episodes: 20
+
+use_cirriculum: false
+initial_human_num: 4
+increase_human_num: 4
+max_human_num: 20
+
+use_init_weights: false

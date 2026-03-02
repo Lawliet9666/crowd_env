@@ -1,0 +1,18 @@
+_target_: new_rl.model.sac_base.ActorCritic
+type: "sac_base"
+obs_dim: ${env.obs_dim}
+act_dim: ${env.act_dim}
+act_low: ${env.act_low}
+act_high: ${env.act_high}
+actor_mlp_config: ${model.actor.mlp}
+critic_mlp_config: ${model.critic.mlp}
+
+actor:
+  mlp:
+    hidden_sizes: [256, 256]
+    act: relu
+
+critic:
+  mlp:
+    hidden_sizes: [256, 256]
+    act: relu

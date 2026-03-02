@@ -117,10 +117,16 @@ def map_action_to_env(
     action_high: np.ndarray,
     action_bound_method: str,
 ) -> np.ndarray:
-    """Bound and scale policy output from [-1, 1] to environment action range."""
+    """Bound and scale policy output to environment action range.
+    For env_clip/env_tanh: expects raw output in [-1,1], then scale.
+    For model_clip/model_tanh: action already in [act_low, act_high], pass through with safety clip.
+    """
     if isinstance(action, torch.Tensor):
         action = action.detach().cpu().numpy()
 
+    if action_bound_method in ("model_clip", "model_tanh"):
+        # SAC/actors that output directly in env space
+        return np.clip(action.astype(np.float32), action_low, action_high)
     if action_bound_method == "env_clip":
         action = np.clip(action, -1.0, 1.0)
     elif action_bound_method == "env_tanh":
@@ -128,12 +134,23 @@ def map_action_to_env(
     else:
         raise ValueError(
             f"Unsupported action_bound_method '{action_bound_method}'. "
-            "Expected one of {'env_clip', 'env_tanh'}."
+            "Expected one of {'env_clip', 'env_tanh', 'model_clip', 'model_tanh'}."
         )
 
     action = action_low + (action_high - action_low) * (action + 1.0) / 2.0
-    return action
+    return action.astype(np.float32)
 
+
+def to_tensor(x: np.ndarray, device: torch.device) -> torch.Tensor:
+    """Convert numpy array to float32 tensor on device."""
+    return torch.as_tensor(x, dtype=torch.float32, device=device)
+
+
+def soft_update(source: nn.Module, target: nn.Module, tau: float) -> None:
+    """Soft update: target = (1 - tau) * target + tau * source."""
+    with torch.no_grad():
+        for p_src, p_tgt in zip(source.parameters(), target.parameters()):
+            p_tgt.data.mul_(1.0 - tau).add_(tau * p_src.data)
 
 
 # ---------------------------------------------------------------------------
@@ -150,14 +167,15 @@ def init_weights(model: nn.Module) -> None:
             nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
             nn.init.zeros_(m.bias)
 
-    # Small last layer for near-zero initial actions
+    # Small last layer for near-zero initial actions (PPO has .net, SAC has .backbone)
     if hasattr(model, "actor"):
-        last_actor_layer = _last_linear(model.actor.net)
+        actor_sub = getattr(model.actor, "net", getattr(model.actor, "backbone", model.actor))
+        last_actor_layer = _last_linear(actor_sub)
         if last_actor_layer is not None:
             last_actor_layer.weight.data *= 0.01
 
-    # Critic last layer: gain=1
+    # Critic last layer: gain=1 (PPO has .critic, SAC has .q1/.q2)
     if hasattr(model, "critic"):
-        last_critic_layer = _last_linear(model.critic.net)
+        last_critic_layer = _last_linear(model.critic)
         if last_critic_layer is not None:
             nn.init.orthogonal_(last_critic_layer.weight, gain=1.0)

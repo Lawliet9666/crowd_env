@@ -5,6 +5,10 @@ WANDB_API_KEY=09a0ff7ac975ebe7e916d51cd6d6b73c60f63ef1  python scripts/run_crowd
 
 
 
-
-
 WANDB_API_KEY=09a0ff7ac975ebe7e916d51cd6d6b73c60f63ef1  python scripts/run_crowdsim_ppo_base.py run_name=testest trainer.use_cirriculum=True
+
+
+WANDB_API_KEY=09a0ff7ac975ebe7e916d51cd6d6b73c60f63ef1  python scripts/run_crowdsim_sac_base.py run_name=yes wandb_entity=daiyp_umich wandb_project=mujoco_test
+
+
+WANDB_API_KEY=09a0ff7ac975ebe7e916d51cd6d6b73c60f63ef1  python scripts/run_mujoco_sac_base.py run_name=sac wandb_entity=daiyp_umich wandb_project=mujoco_test

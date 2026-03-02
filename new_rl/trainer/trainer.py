@@ -120,10 +120,24 @@ class Trainer:
                 use_return_norm=self.config.trainer.use_return_norm,
             )
             self.model.to(self.device)
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.trainer.lr)
+
+        elif self.config.model.type == "sac_base":
+            from new_rl.model.sac_base import ActorCritic
+            self.model = ActorCritic(
+                obs_dim=self.config.env.obs_dim,
+                act_dim=self.config.env.act_dim,
+                act_low=self.action_low,
+                act_high=self.action_high,
+                actor_mlp_config=self.config.model.actor.mlp,
+                critic_mlp_config=self.config.model.critic.mlp,
+            )
+            self.model.to(self.device)
         else:
             raise ValueError(f"Model type {self.config.model.type} not supported")
-        init_weights(self.model)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.trainer.lr)
+        
+        if getattr(self.config.trainer, "use_init_weights", True):
+            init_weights(self.model)
 
         
     def setup_env(self):
@@ -193,6 +207,9 @@ class Trainer:
         print(f"\tAct dim: {self.act_dim}")
         assert self.obs_dim == self.config.env.obs_dim, "obs_dim mismatch"
         assert self.act_dim == self.config.env.act_dim, "act_dim mismatch"
+
+        assert np.allclose(self.action_low, self.config.env.act_low), "action_low mismatch"
+        assert np.allclose(self.action_high, self.config.env.act_high), "action_high mismatch"
         
     
     def reset_env(self):
