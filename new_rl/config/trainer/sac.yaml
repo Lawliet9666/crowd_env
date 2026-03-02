@@ -2,8 +2,8 @@ total_steps: 10000000
 start_timesteps: 10000
 replay_buffer_size: 1000000
 batch_size: 256
-num_envs: 1
-update_per_step: 1
+num_envs: 4
+update_per_step: 2
 # PPO-compat keys (unused by SAC, required by base Trainer)
 minibatch_size: 256
 update_epochs: 1
