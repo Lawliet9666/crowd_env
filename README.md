@@ -15,7 +15,7 @@ WANDB_API_KEY=xxx  python scripts/run_crowdsim_ppo_base.py run_name=xxx wandb_en
 ```
 
 ### Best practice for PPO
-Use large batch_size (i.e.g rollout) and minibatch_size
+Use large batch_size (i.e rollout 8196) and large minibatch_size (e.g., 256)
 
 | Total Steps | Batch size| minibatch size| best success| 
 |:-:|:-:|:-:|:-:|
@@ -32,23 +32,21 @@ Use large batch_size (i.e.g rollout) and minibatch_size
 
 ### Best practice for SAC
 
-Set small alpha (e.g., 0.001 or auto)
+Set small alpha (e.g., 0.001 or auto), batch size 128-256
 
 | Total Steps | Batch size | alpha | best success| 
 |:-:|:-:|:-:|:-:|
-| 1 M | 256 | 0.001 | 57 % | 
-| 1 M | 256 | auto | 61 % | 
-| 2 M | 256 | 0.001 | 78.6% | 
-| 2 M | 256 | auto | 77 % | 
-| 2.5M | 256 | 0.001 | 80.6% | 
-| 2.5M | 256 |  auto | 78% |
-| 10M | 256 |  0.001 |  | 
-| 10M | 256 | auto | |
+| 1M | 256 | 0.001 | 57 % | 
+| 1M | 256 | auto | 61 % | 
+| 2M | 256 | 0.001 | 78.6% | 
+| 2M | 256 | auto | 77% | 
+| 3M | 256 | 0.001 | 81% | 
+| 3M | 256 | auto | 78% |
+| 10M | 256 |  0.001 | -- | 
+| 10M | 256 | auto | -- |
 
 
 1M-2M should be enough for your experiment. SAC 1M takes 2 hours.
-
-
 
 ## test
 ```

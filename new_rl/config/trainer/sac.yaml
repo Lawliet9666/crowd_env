@@ -5,7 +5,7 @@ batch_size: 256
 num_envs: 4
 update_per_step: 2
 # PPO-compat keys (unused by SAC, required by base Trainer)
-minibatch_size: 256
+minibatch_size: 1
 update_epochs: 1
 
 gamma: 0.99
