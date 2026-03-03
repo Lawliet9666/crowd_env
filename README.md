@@ -15,7 +15,7 @@ WANDB_API_KEY=xxx  python scripts/run_crowdsim_ppo_base.py run_name=xxx wandb_en
 ```
 
 ### Best practice for PPO
-Use large batch_size (i.e rollout 8196) and large minibatch_size (e.g., 256 or larger)
+Use large batch_size (i.e rollout 8196) and large minibatch_size (e.g., 256 or larger).  
 A good config example is `runs/multi-crowdsim-20m-ppo_base-bs8192-256-ep4-lr2.5e-04-cons-vf0.5-env_clip-ent0.02decay/config.yaml`
 
 | Total Steps | Batch size| minibatch size| best success| 
@@ -34,7 +34,7 @@ A good config example is `runs/multi-crowdsim-20m-ppo_base-bs8192-256-ep4-lr2.5e
 
 ### Best practice for SAC
 
-Set small alpha (e.g., 0.001 or auto), batch size 128-256, do not use larger batch size.
+Set small alpha (e.g., 0.001 or auto), batch size 128-256, do not use larger batch size.  
 A good config example is `runs/SACabl-crowdsim-silu-env8-sac_base-bs128-a0.001-alr1.0e-03-clr1.0e-03-model_tanh/config.yaml`
 
 | Total Steps | Batch size | alpha | activation |best success| 
