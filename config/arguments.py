@@ -15,9 +15,10 @@ def get_args():
 		choices=[
 			'rl',
 			'rlcbfgamma',
+			'rlcbfgamma_v2',
 			'rlcvarbetaradius',
 		],
-		help='main_vec RL policy class: rl, rlcbfgamma, rlcvarbetaradius'
+		help='main_vec RL policy class: rl, rlcbfgamma, rlcbfgamma_v2, rlcvarbetaradius'
 	)
 	parser.add_argument(
 		'--test_mode',

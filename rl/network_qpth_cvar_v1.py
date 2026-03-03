@@ -91,9 +91,9 @@ class BarrierNet(nn.Module):
             obs = obs.unsqueeze(0)
         obs = obs.reshape(obs.size(0), -1)
 
-        x = F.relu(self.fc1(obs))
-        x21 = F.relu(self.fc21(x))
-        x22 = F.relu(self.fc22(x))
+        x = F.silu(self.fc1(obs))
+        x21 = F.silu(self.fc21(x))
+        x22 = F.silu(self.fc22(x))
 
         u_nom = self.fc31(x21)
         beta = self.beta *torch.sigmoid(self.fc32(x22)).squeeze(-1)  # (B,)

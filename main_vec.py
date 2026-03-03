@@ -36,6 +36,7 @@ ALGO_TO_MODEL = {
 
 METHOD_NEEDS_QP_RELATIVE = {
     "rlcbfgamma": True,
+    "rlcbfgamma_v2": True,
     "rlcvarbetaradius": True,
 }
 

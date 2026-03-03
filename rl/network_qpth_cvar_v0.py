@@ -41,8 +41,8 @@ class BarrierNet(nn.Module):
             obs = obs.unsqueeze(0)
         obs = obs.reshape(obs.size(0), -1)
 
-        x = F.relu(self.fc1(obs))
-        x = F.relu(self.fc2(x))
+        x = F.silu(self.fc1(obs))
+        x = F.silu(self.fc2(x))
         u_nom = self.fc_out(x)
 
         u_safe = self.dCVaR_CBF_SI(obs, u_nom)

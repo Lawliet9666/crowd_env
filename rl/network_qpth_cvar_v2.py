@@ -148,10 +148,10 @@ class BarrierNet(nn.Module):
                 f"CVaR-BarrierNet(v2) expected obs_qp dim={self.qp_obs_dim}, got {obs_qp.size(1)}."
             )
 
-        x = F.relu(self.fc1(obs_actor))
-        x21 = F.relu(self.fc21(x))
-        x22 = F.relu(self.fc22(x))
-        x23 = F.relu(self.fc23(x))  # reuse fc22 for radius
+        x = F.silu(self.fc1(obs_actor))
+        x21 = F.silu(self.fc21(x))
+        x22 = F.silu(self.fc22(x))
+        x23 = F.silu(self.fc23(x))  # reuse fc22 for radius
 
         u_nom = self.fc31(x21)
         # beta = self.beta * torch.sigmoid(self.fc32(x22)).squeeze(-1)  # (B,) in [0, self.beta]

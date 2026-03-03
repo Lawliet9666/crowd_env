@@ -50,7 +50,7 @@ class BarrierNet(nn.Module):
             obs = obs.unsqueeze(0)
         obs = obs.reshape(obs.size(0), -1)
 
-        x = F.relu(self.fc_in(obs))
+        x = F.silu(self.fc_in(obs))
         x = self.res1(x)
         x = self.res2(x)
         u_nom = self.fc_out(x)

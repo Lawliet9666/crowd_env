@@ -12,6 +12,9 @@ def get_rl_policy_class(method: str):
     if method == "rlcbfgamma":
         import rl.network_qpth_v1 as cbf_u_gamma
         return cbf_u_gamma.BarrierNet
+    if method == "rlcbfgamma_v2":
+        import rl.network_qpth_v2 as cbf_u_gamma_v2
+        return cbf_u_gamma_v2.BarrierNet
     if method == "rlcvar":
         import rl.network_qpth_cvar_v0 as cvar_cbf
         return cvar_cbf.BarrierNet
