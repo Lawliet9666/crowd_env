@@ -24,9 +24,10 @@ A good config example is `runs/multi-crowdsim-20m-ppo_base-bs8192-256-ep4-lr2.5e
 | 10M | 4096 | 64 | 61%  |
 | 10M | 8192 | 256 | 64% |
 | 20M | 4096 | 64 | 66% |
-| 20M | 8192 | 256 | 72.6% |
-| 50M | 4096 | 64 | 69.4%  |
-| 50M | 8192 | 256 | 74.2% |
+| 20M | 8192 | 256 | 73% |
+| 50M | 4096 | 64 | 69%  |
+| 50M | 8192 | 256 | 74% |
+| 100M | 8192 | 256 | 75% |
 
 10M-20M should be enough for your experiment. PPO 20M takes 4.3 hours (when num_env=8). You can increase num_envs=16/32 if needed.
 
@@ -42,11 +43,12 @@ A good config example is `runs/SACabl-crowdsim-silu-env8-sac_base-bs128-a0.001-a
 | 1M | 256 | auto |relu| 61 % | 
 | 1M | 256 | 0.001 |relu| 57 % |
 | 2M | 256 | auto |relu| 77% | 
-| 2M | 256 | 0.001 |relu| 78.6% | 
+| 2M | 256 | 0.001 |relu| 79% | 
 | 2M | 256 | 0.001 |silu|  84% | 
 | 2M | 128 | 0.001 |silu|  85% |
 | 3M | 256 | auto |relu| 78% |
 | 3M | 256 | 0.001 |relu| 81% | 
+| 10M | 128 | 0.001 |silu|  86% |
 
 
 
