@@ -28,20 +28,21 @@ def get_args():
 		'--obs_preprocess',
 		type=str,
 		default='relative',
-		choices=['relative', 'polar', 'none'],
+		choices=['relative', 'polar', 'none', 'raw'],
 		help='Observation preprocessing mode before policy input'
 	)
 	parser.add_argument(
-		'--polar_topk',
+		'--obs_topk',
+		dest='obs_topk',
 		type=int,
 		default=5,
-		help='Top-k obstacles used by polar observation wrapper'
+		help='Top-k obstacles used by relative/polar observation preprocessing (legacy alias: --polar_topk)'
 	)
 	parser.add_argument(
-		'--polar_farest_dist',
+		'--obs_farest_dist',
 		type=float,
 		default=5.0,
-		help='Distance cap/padding value for polar observation wrapper'
+		help='Distance cap/padding value for polar observation preprocessing'
 	)
 
 	# -------------------------------------------------------------------------

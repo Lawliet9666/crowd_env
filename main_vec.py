@@ -16,7 +16,13 @@ from crowd_nav.policy_utils import get_policy_class
 
 from config.arguments import get_args
 from config.config import Config
-from crowd_sim.utils import build_env, dump_test_config, dump_train_config, relative_obs_dim_from_env_dim
+from crowd_sim.utils import (
+    build_env,
+    dump_test_config,
+    dump_train_config,
+    polar_obs_dim_from_env_dim,
+    relative_obs_dim_from_env_dim,
+)
 from eval_policy import RLEvalActorAdapter, eval_policy
 from rl.vec_ppo import VecPPO
 from rl.vec_sac import VecSAC
@@ -28,19 +34,11 @@ ALGO_TO_MODEL = {
 }
 
 
-def make_env_fn(config, env_name, env_kwargs):
+def make_env_fn(config, env_name):
     def _init():
-        return build_env(env_name, render_mode=None, config=config, **env_kwargs)
+        return build_env(env_name, render_mode=None, config=config)
 
     return _init
-
-
-def build_env_kwargs(args):
-    return {
-        "obs_preprocess": args.obs_preprocess,
-        "polar_topk": args.polar_topk,
-        "polar_farest_dist": args.polar_farest_dist,
-    }
 
 
 def set_global_seeds(seed):
@@ -130,7 +128,10 @@ def build_sac_hyperparameters(args, base_hyperparameters, config):
             "eval_episodes": args.sac_eval_episodes,
             "cbf_alpha": config.controller_params["cbf_alpha"],
             "cvar_beta": config.controller_params["cvar_beta"],
+
             "obs_preprocess": args.obs_preprocess,
+            "obs_topk": args.obs_topk,
+            "obs_farest_dist": args.obs_farest_dist,
         }
     )
     return hyperparameters
@@ -154,6 +155,8 @@ def build_ppo_hyperparameters(args, base_hyperparameters, config):
             "alpha": config.controller_params["cbf_alpha"],
             "beta": config.controller_params["cvar_beta"],
             "obs_preprocess": args.obs_preprocess,
+            "obs_topk": args.obs_topk,
+            "obs_farest_dist": args.obs_farest_dist,
         }
     )
     return hyperparameters
@@ -208,7 +211,19 @@ def test(env, actor_model, device, method, hyperparameters, algo):
     PolicyClass = get_policy_class(method)
     print(f"Algorithm: {algo.upper()}, Policy: {PolicyClass.__name__}", flush=True)
     env_obs_dim = int(env.observation_space.shape[0])
-    obs_dim = relative_obs_dim_from_env_dim(env_obs_dim)  
+    obs_mode = str(hyperparameters.get("obs_preprocess", "relative")).lower()
+    obs_topk = int(hyperparameters.get("obs_topk", 5))
+    obs_farest_dist = float(hyperparameters.get("obs_farest_dist", 5.0))
+    if obs_mode == "relative":
+        obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
+    elif obs_mode == "polar":
+        obs_dim = int(polar_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
+    elif obs_mode in ("none", "raw"):
+        obs_dim = env_obs_dim
+    else:
+        raise ValueError(
+            f"Unknown obs_preprocess '{obs_mode}'. Expected one of: relative, polar, none."
+        )
     act_dim = env.action_space.shape[0]
 
     relevant_keys = ['robot_type', 'safe_dist', 'alpha', 'beta', 'vmax', 'amax', 'omega_max', 'slack_weight']
@@ -231,7 +246,9 @@ def test(env, actor_model, device, method, hyperparameters, algo):
         save_path=save_path,
         base_seed=eval_seed,
         method=method,
-        obs_preprocess=hyperparameters.get("obs_preprocess", "relative"),
+        obs_preprocess=obs_mode,
+        obs_topk=obs_topk,
+        obs_farest_dist=obs_farest_dist,
         visualize_episodes=hyperparameters["test_viz_ep"],
     )
     # run_crossing_scenario(actor, env, save_path=save_path)
@@ -258,7 +275,6 @@ def main(args):
 
     config = Config()
     env_name = config.env.get("name", "social_nav_var_num")
-    env_kwargs = build_env_kwargs(args)
 
     now = datetime.now()
     timestamp = now.strftime("%Y%m%d_%H%M%S")
@@ -298,15 +314,15 @@ def main(args):
 
         num_envs = int(args.num_envs) if int(args.num_envs) > 0 else max(1, multiprocessing.cpu_count())
         print(f"Requested num_envs={args.num_envs}; using num_envs={num_envs}", flush=True)
-        env_fns = [make_env_fn(config, env_name, env_kwargs) for _ in range(num_envs)]
+        env_fns = [make_env_fn(config, env_name) for _ in range(num_envs)]
         vec_env = AsyncVectorEnv(env_fns)
         model_hyperparameters = dict(hyperparameters)
         eval_env = None
         if args.algo == "sac" and args.sac_eval_freq_episodes > 0 and args.sac_eval_episodes > 0:
-            eval_env = build_env(env_name, render_mode=None, config=config, **env_kwargs)
+            eval_env = build_env(env_name, render_mode=None, config=config)
             model_hyperparameters["eval_env"] = eval_env
         if args.algo == "ppo" and args.ppo_eval_freq_timesteps > 0 and args.ppo_eval_episodes > 0:
-            eval_env = build_env(env_name, render_mode=None, config=config, **env_kwargs)
+            eval_env = build_env(env_name, render_mode=None, config=config)
             model_hyperparameters["eval_env"] = eval_env
         try:
             train(
@@ -338,7 +354,7 @@ def main(args):
             extra={"eval_seed": args.eval_seed, "method": args.method, "algo": args.algo},
         )
 
-        env = build_env(env_name, render_mode="rgb_array", config=config, **env_kwargs)
+        env = build_env(env_name, render_mode="rgb_array", config=config)
         test(
             env=env,
             actor_model=actor_model,

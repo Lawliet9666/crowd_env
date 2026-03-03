@@ -17,7 +17,12 @@ import torch.nn as nn
 from torch.optim import Adam
 from torch.distributions import Normal, Independent
 from rl.network import FCNet
-from crowd_sim.utils import absolute_obs_batch_to_relative, relative_obs_dim_from_env_dim
+from crowd_sim.utils import (
+    absolute_obs_batch_to_polar,
+    absolute_obs_batch_to_relative,
+    polar_obs_dim_from_env_dim,
+    relative_obs_dim_from_env_dim,
+)
 # from rl.network_deepsets import DeepSetsPolicy, DeepSetsValueNet
 
 class PPO:
@@ -53,7 +58,17 @@ class PPO:
             env_obs_dim = int(env.observation_space.shape[0])
             self.act_dim = env.action_space.shape[0]
             act_space = env.action_space
-        self.obs_dim = relative_obs_dim_from_env_dim(env_obs_dim)
+        mode = str(getattr(self, "obs_preprocess", "relative")).lower()
+        if mode == "relative":
+            self.obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=self.obs_topk))
+        elif mode == "polar":
+            self.obs_dim = int(polar_obs_dim_from_env_dim(env_obs_dim, topk=self.obs_topk))
+        elif mode in ("none", "raw"):
+            self.obs_dim = int(env_obs_dim)
+        else:
+            raise ValueError(
+                f"Unknown obs_preprocess '{self.obs_preprocess}'. Expected one of: relative, polar, none."
+            )
 
         # Squashed Gaussian action mapping:
         # z ~ N(mu, sigma), u=tanh(z) in [-1, 1], a=bias+scale*u in [low, high]
@@ -580,8 +595,14 @@ class PPO:
     def _preprocess_obs(self, obs):
         mode = str(getattr(self, "obs_preprocess", "relative")).lower()
         if mode == "relative":
-            return absolute_obs_batch_to_relative(obs)
-        if mode in ("polar", "none", "raw"):
+            return absolute_obs_batch_to_relative(obs, topk=self.obs_topk)
+        if mode == "polar":
+            return absolute_obs_batch_to_polar(
+                obs,
+                topk=self.obs_topk,
+                farest_dist=self.obs_farest_dist,
+            )
+        if mode in ("none", "raw"):
             return np.asarray(obs, dtype=np.float32)
         raise ValueError(
             f"Unknown obs_preprocess '{self.obs_preprocess}'. Expected one of: relative, polar, none."
@@ -674,6 +695,8 @@ class PPO:
         self.eval_freq_timesteps = 200000                # Eval cadence in timesteps
         self.eval_episodes = 50                          # Episodes per periodic evaluation
         self.obs_preprocess = "relative"                 # relative | polar | none
+        self.obs_topk = 5                                # top-k obstacles used by relative preprocessing
+        self.obs_farest_dist = 5.0                       # padding/distance cap used by polar preprocessing
 
         # Miscellaneous parameters
         self.render = False                             # If we should render during rollout

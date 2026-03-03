@@ -2,7 +2,6 @@ import json
 import os
 
 import numpy as np
-from gymnasium import ObservationWrapper, spaces
 from config.config import Config
  
 
@@ -11,15 +10,53 @@ def is_absolute_obs_dim(obs_dim: int) -> bool:
     return dim >= 8 and (dim - 8) % 6 == 0
 
 
-def relative_obs_dim_from_env_dim(obs_dim: int) -> int:
+def is_polar_obs_dim(obs_dim: int) -> bool:
     dim = int(obs_dim)
+    return dim >= 3 and (dim - 3) % 4 == 0
+
+
+def _validate_topk(topk, allow_none: bool = False):
+    if topk is None:
+        if allow_none:
+            return None
+        raise ValueError("topk must be provided")
+    k = int(topk)
+    if k <= 0:
+        raise ValueError(f"topk must be positive, got {topk}")
+    return k
+
+
+def relative_obs_dim_from_env_dim(obs_dim: int, topk=None) -> int:
+    dim = int(obs_dim)
+    k = _validate_topk(topk, allow_none=True)
     if is_absolute_obs_dim(dim):
-        # abs format: 8 + K*6 -> legacy rel format: 6 + K*6
-        return dim - 2
+        if k is None:
+            # abs format: 8 + K*6 -> legacy rel format: 6 + K*6
+            return dim - 2
+        return 6 + 6 * k
+    if dim >= 6 and (dim - 6) % 6 == 0:
+        if k is None:
+            return dim
+        # relative format uses fixed top-k obstacle slots.
+        return 6 + 6 * k
     return dim
 
 
-def absolute_obs_to_relative(obs):
+def polar_obs_dim_from_env_dim(obs_dim: int, topk=None) -> int:
+    dim = int(obs_dim)
+    k = _validate_topk(topk, allow_none=True)
+    if is_absolute_obs_dim(dim):
+        if k is None:
+            k = (dim - 8) // 6
+        return 3 + 4 * k
+    if is_polar_obs_dim(dim):
+        if k is None:
+            return dim
+        return 3 + 4 * k
+    return dim
+
+
+def absolute_obs_to_relative(obs, topk=None):
     """
     Convert observation from absolute format to legacy relative format.
 
@@ -30,39 +67,53 @@ def absolute_obs_to_relative(obs):
       [goal_rel_x, goal_rel_y, rvx, rvy, rtheta, rr, (rel_x, rel_y, hvx, hvy, hr, mask)*K]
     """
     x = np.asarray(obs, dtype=np.float32).reshape(-1)
+    if x.size >= 8 and (x.size - 8) % 6 == 0:
+        # Absolute format -> relative format with fixed top-k slots.
+        k_in = (x.size - 8) // 6
+        k_out = _validate_topk(topk, allow_none=True)
+        if k_out is None:
+            k_out = k_in
+        out = np.zeros((6 + 6 * k_out,), dtype=np.float32)
 
-    # Pass through legacy relative observations.
+        rx, ry, gx, gy, rvx, rvy, rtheta, rr = x[:8]
+        out[0] = rx - gx
+        out[1] = ry - gy
+        out[2] = rvx
+        out[3] = rvy
+        out[4] = rtheta
+        out[5] = rr
+
+        take = min(k_in, k_out)
+        if take > 0:
+            blocks = x[8:].reshape(k_in, 6)[:take]
+            out_blocks = np.zeros((k_out, 6), dtype=np.float32)
+            out_blocks[:take, 0] = rx - blocks[:, 0]
+            out_blocks[:take, 1] = ry - blocks[:, 1]
+            out_blocks[:take, 2:6] = blocks[:, 2:6]
+            out[6:] = out_blocks.reshape(-1)
+        return out
+
     if x.size >= 6 and (x.size - 6) % 6 == 0:
-        if not (x.size >= 8 and (x.size - 8) % 6 == 0):
+        # Already-relative input -> enforce fixed top-k width via truncate/pad.
+        k_out = _validate_topk(topk, allow_none=True)
+        if k_out is None:
             return x
-        # If both checks pass (unlikely/ambiguous), prefer absolute interpretation.
+        out = np.zeros((6 + 6 * k_out,), dtype=np.float32)
 
-    if not (x.size >= 8 and (x.size - 8) % 6 == 0):
-        raise ValueError(f"Unsupported observation length for abs->rel conversion: {x.size}")
+        k_in = (x.size - 6) // 6
+        out[:6] = x[:6]
+        take = min(k_in, k_out)
+        if take > 0:
+            blocks = x[6:].reshape(k_in, 6)[:take]
+            out_blocks = np.zeros((k_out, 6), dtype=np.float32)
+            out_blocks[:take, :] = blocks
+            out[6:] = out_blocks.reshape(-1)
+        return out
 
-    k = (x.size - 8) // 6
-    out = np.zeros((6 + 6 * k,), dtype=np.float32)
-
-    rx, ry, gx, gy, rvx, rvy, rtheta, rr = x[:8]
-    out[0] = rx - gx
-    out[1] = ry - gy
-    out[2] = rvx
-    out[3] = rvy
-    out[4] = rtheta
-    out[5] = rr
-
-    if k > 0:
-        blocks = x[8:].reshape(k, 6)
-        out_blocks = np.zeros((k, 6), dtype=np.float32)
-        out_blocks[:, 0] = rx - blocks[:, 0]
-        out_blocks[:, 1] = ry - blocks[:, 1]
-        out_blocks[:, 2:6] = blocks[:, 2:6]
-        out[6:] = out_blocks.reshape(-1)
-
-    return out
+    raise ValueError(f"Unsupported observation length for abs->rel conversion: {x.size}")
 
 
-def absolute_obs_batch_to_relative(obs_batch):
+def absolute_obs_batch_to_relative(obs_batch, topk=None):
     """
     Batch version of absolute_obs_to_relative.
     Input can be shape (N, D) absolute observations or already-relative (N, D_rel).
@@ -70,14 +121,17 @@ def absolute_obs_batch_to_relative(obs_batch):
     arr = np.asarray(obs_batch, dtype=np.float32)
 
     if arr.ndim == 1:
-        return absolute_obs_to_relative(arr)
+        return absolute_obs_to_relative(arr, topk=topk)
     if arr.ndim != 2:
         raise ValueError(f"Expected obs batch with ndim 1 or 2, got shape {arr.shape}")
 
     n, d = arr.shape
     if d >= 8 and (d - 8) % 6 == 0:
-        k = (d - 8) // 6
-        out = np.zeros((n, 6 + 6 * k), dtype=np.float32)
+        k_in = (d - 8) // 6
+        k_out = _validate_topk(topk, allow_none=True)
+        if k_out is None:
+            k_out = k_in
+        out = np.zeros((n, 6 + 6 * k_out), dtype=np.float32)
 
         rx = arr[:, 0:1]
         ry = arr[:, 1:2]
@@ -88,18 +142,31 @@ def absolute_obs_batch_to_relative(obs_batch):
         out[:, 1:2] = ry - gy
         out[:, 2:6] = arr[:, 4:8]
 
-        if k > 0:
-            blocks = arr[:, 8:].reshape(n, k, 6)
-            out_blocks = np.zeros((n, k, 6), dtype=np.float32)
-            out_blocks[:, :, 0] = rx - blocks[:, :, 0]
-            out_blocks[:, :, 1] = ry - blocks[:, :, 1]
-            out_blocks[:, :, 2:6] = blocks[:, :, 2:6]
-            out[:, 6:] = out_blocks.reshape(n, 6 * k)
+        take = min(k_in, k_out)
+        if take > 0:
+            blocks = arr[:, 8:].reshape(n, k_in, 6)[:, :take, :]
+            out_blocks = np.zeros((n, k_out, 6), dtype=np.float32)
+            out_blocks[:, :take, 0] = rx - blocks[:, :, 0]
+            out_blocks[:, :take, 1] = ry - blocks[:, :, 1]
+            out_blocks[:, :take, 2:6] = blocks[:, :, 2:6]
+            out[:, 6:] = out_blocks.reshape(n, 6 * k_out)
 
         return out
 
     if d >= 6 and (d - 6) % 6 == 0:
-        return arr
+        k_out = _validate_topk(topk, allow_none=True)
+        if k_out is None:
+            return arr
+        k_in = (d - 6) // 6
+        out = np.zeros((n, 6 + 6 * k_out), dtype=np.float32)
+        out[:, :6] = arr[:, :6]
+        take = min(k_in, k_out)
+        if take > 0:
+            blocks = arr[:, 6:].reshape(n, k_in, 6)[:, :take, :]
+            out_blocks = np.zeros((n, k_out, 6), dtype=np.float32)
+            out_blocks[:, :take, :] = blocks
+            out[:, 6:] = out_blocks.reshape(n, 6 * k_out)
+        return out
 
     raise ValueError(f"Unsupported batch observation width for abs->rel conversion: {d}")
 
@@ -124,7 +191,7 @@ def absolute_obs_to_polar(obs, topk: int = 5, farest_dist: float = 5.0):
     rx, ry, gx, gy, rvx, rvy, rtheta, rr = x[:8]
     blocks = x[8:].reshape(-1, 6)
 
-    topk = int(topk)
+    topk = _validate_topk(topk)
     farest_dist = float(farest_dist)
     k = min(blocks.shape[0], topk)
 
@@ -174,27 +241,6 @@ def absolute_obs_batch_to_polar(obs_batch, topk: int = 5, farest_dist: float = 5
         [absolute_obs_to_polar(row, topk=topk, farest_dist=farest_dist) for row in arr],
         axis=0,
     )
-
-
-class PolarObsWrapper(ObservationWrapper):
-    def __init__(self, env, topk: int = 5, farest_dist: float = 5.0):
-        super().__init__(env)
-        self.topk = int(topk)
-        self.farest_dist = float(farest_dist)
-        self.obs_dim = 3 + self.topk * 4
-        self.observation_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(self.obs_dim,),
-            dtype=np.float32,
-        )
-
-    def observation(self, obs):
-        return absolute_obs_to_polar(
-            obs,
-            topk=self.topk,
-            farest_dist=self.farest_dist,
-        )
 
 
 def parse_obstacles(obs):
@@ -259,9 +305,6 @@ def build_env(
     env_name: str,
     render_mode: str,
     config: Config,
-    obs_preprocess: str = "relative",
-    polar_topk: int = 5,
-    polar_farest_dist: float = 5.0,
 ):
     from crowd_sim.env.social_nav import SocialNav
     from crowd_sim.env.social_nav_var_num import SocialNavVarNum
@@ -270,26 +313,8 @@ def build_env(
         env = SocialNav(render_mode=render_mode, config_file=config)
     elif env_name == "social_nav_var_num":
         env = SocialNavVarNum(render_mode=render_mode, config_file=config)
-    elif env_name in ("social_nav_var_num_polar", "social_nav_var_num_ploar"):
-        env = SocialNavVarNum(render_mode=render_mode, config_file=config)
-        obs_preprocess = "polar"
     else:
         raise ValueError(f"Unknown env: {env_name}")
-
-    mode = str(obs_preprocess).lower()
-    if mode == "polar":
-        env = PolarObsWrapper(
-            env,
-            topk=polar_topk,
-            farest_dist=polar_farest_dist,
-        )
-    elif mode in ("relative", "none", "raw"):
-        pass
-    else:
-        raise ValueError(
-            f"Unknown obs_preprocess '{obs_preprocess}'. Expected one of: relative, polar, none."
-        )
-
     return env
 
 def to_jsonable(obj):

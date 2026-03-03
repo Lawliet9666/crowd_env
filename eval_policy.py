@@ -9,7 +9,7 @@ import imageio
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from crowd_sim.utils import absolute_obs_to_relative
+from crowd_sim.utils import absolute_obs_to_polar, absolute_obs_to_relative
 
 
 class RLEvalActorAdapter:
@@ -37,19 +37,26 @@ class RLEvalActorAdapter:
     def __getattr__(self, name):
         return getattr(self.actor, name)
 
-def _preprocess_obs(obs, obs_preprocess="relative"):
+def _preprocess_obs(obs, obs_preprocess="relative", obs_topk=5, obs_farest_dist=5.0):
     mode = str(obs_preprocess).lower()
     if mode == "relative":
-        return absolute_obs_to_relative(obs)
-    if mode in ("polar", "none", "raw"):
+        return absolute_obs_to_relative(obs, topk=obs_topk)
+    if mode == "polar":
+        return absolute_obs_to_polar(obs, topk=obs_topk, farest_dist=obs_farest_dist)
+    if mode in ("none", "raw"):
         return np.asarray(obs, dtype=np.float32).reshape(-1)
     raise ValueError(
         f"Unknown obs_preprocess '{obs_preprocess}'. Expected one of: relative, polar, none."
     )
 
 
-def _compute_action(actor, obs, obs_preprocess="relative"):
-    obs = _preprocess_obs(obs, obs_preprocess=obs_preprocess)
+def _compute_action(actor, obs, obs_preprocess="relative", obs_topk=5, obs_farest_dist=5.0):
+    obs = _preprocess_obs(
+        obs,
+        obs_preprocess=obs_preprocess,
+        obs_topk=obs_topk,
+        obs_farest_dist=obs_farest_dist,
+    )
     if hasattr(actor, "deterministic"):
         actor.deterministic = True
     out = actor.get_action(obs)
@@ -264,7 +271,16 @@ def _record_executed_action(metrics, env, fallback_action):
     metrics["action_exec"].append(np.array(executed, dtype=float))
 
 
-def rollout(actor, env, base_seed=0, track_signals=False, unom_holder=None, obs_preprocess="relative"):
+def rollout(
+    actor,
+    env,
+    base_seed=0,
+    track_signals=False,
+    unom_holder=None,
+    obs_preprocess="relative",
+    obs_topk=5,
+    obs_farest_dist=5.0,
+):
     ep_cnt = 0
     while True:
         obs, _ = env.reset(seed=base_seed + ep_cnt)
@@ -284,7 +300,13 @@ def rollout(actor, env, base_seed=0, track_signals=False, unom_holder=None, obs_
 
             _render_step(env, frames)
 
-            action = _compute_action(actor, obs, obs_preprocess=obs_preprocess)
+            action = _compute_action(
+                actor,
+                obs,
+                obs_preprocess=obs_preprocess,
+                obs_topk=obs_topk,
+                obs_farest_dist=obs_farest_dist,
+            )
             _record_actor_metrics(metrics, actor, action, unom_holder)
 
             obs, rew, terminated, truncated, info = env.step(action)
@@ -309,6 +331,8 @@ def eval_policy(
     base_seed=None,
     method=None,
     obs_preprocess="relative",
+    obs_topk=5,
+    obs_farest_dist=5.0,
     visualize_episodes=20,
 ):
     total_episodes = 0
@@ -333,6 +357,8 @@ def eval_policy(
                 track_signals=track_signals,
                 unom_holder=unom_holder,
                 obs_preprocess=obs_preprocess,
+                obs_topk=obs_topk,
+                obs_farest_dist=obs_farest_dist,
             )
         ):
             _log_summary(ep_len, ep_ret, ep_num, ep_collision, ep_success)
@@ -399,6 +425,8 @@ def eval_policy(
                 "base_seed": base_seed,
                 "method": mode,
                 "obs_preprocess": str(obs_preprocess).lower(),
+                "obs_topk": int(obs_topk),
+                "obs_farest_dist": float(obs_farest_dist),
             },
             "results": summary,
         }
@@ -406,7 +434,14 @@ def eval_policy(
             json.dump(log_payload, f, indent=2)
 
 
-def run_crossing_scenario(policy, env, save_path=None, obs_preprocess="relative"):
+def run_crossing_scenario(
+    policy,
+    env,
+    save_path=None,
+    obs_preprocess="relative",
+    obs_topk=5,
+    obs_farest_dist=5.0,
+):
     actor = policy
 
     obs, _ = env.reset(options={"scenario": "crossing"})
@@ -417,7 +452,13 @@ def run_crossing_scenario(policy, env, save_path=None, obs_preprocess="relative"
 
     while not done:
         _render_step(env, frames)
-        action = _compute_action(actor, obs, obs_preprocess=obs_preprocess)
+        action = _compute_action(
+            actor,
+            obs,
+            obs_preprocess=obs_preprocess,
+            obs_topk=obs_topk,
+            obs_farest_dist=obs_farest_dist,
+        )
 
         obs, _, terminated, truncated, info = env.step(action)
         if info.get("is_collision", False):

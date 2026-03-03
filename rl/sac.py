@@ -12,7 +12,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
-from crowd_sim.utils import absolute_obs_batch_to_relative, relative_obs_dim_from_env_dim
+from crowd_sim.utils import (
+    absolute_obs_batch_to_polar,
+    absolute_obs_batch_to_relative,
+    polar_obs_dim_from_env_dim,
+    relative_obs_dim_from_env_dim,
+)
 
 
 LOG_STD_MIN = -20.0
@@ -98,8 +103,10 @@ class SAC:
         env_obs_dim = int(np.prod(obs_space.shape))
         mode = str(getattr(self, "obs_preprocess", "relative")).lower()
         if mode == "relative":
-            self.obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim))
-        elif mode in ("polar", "none", "raw"):
+            self.obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=self.obs_topk))
+        elif mode == "polar":
+            self.obs_dim = int(polar_obs_dim_from_env_dim(env_obs_dim, topk=self.obs_topk))
+        elif mode in ("none", "raw"):
             self.obs_dim = int(env_obs_dim)
         else:
             raise ValueError(
@@ -646,8 +653,14 @@ class SAC:
     def _to_policy_obs(self, obs):
         mode = str(getattr(self, "obs_preprocess", "relative")).lower()
         if mode == "relative":
-            return absolute_obs_batch_to_relative(obs)
-        if mode in ("polar", "none", "raw"):
+            return absolute_obs_batch_to_relative(obs, topk=self.obs_topk)
+        if mode == "polar":
+            return absolute_obs_batch_to_polar(
+                obs,
+                topk=self.obs_topk,
+                farest_dist=self.obs_farest_dist,
+            )
+        if mode in ("none", "raw"):
             return np.asarray(obs, dtype=np.float32)
         raise ValueError(
             f"Unknown obs_preprocess '{self.obs_preprocess}'. Expected one of: relative, polar, none."
@@ -688,6 +701,8 @@ class SAC:
         self.eval_episodes = 20
         self.device = torch.device("cpu")
         self.obs_preprocess = "relative"
+        self.obs_topk = 5
+        self.obs_farest_dist = 5.0
 
         self.safe_dist = 0.8
         self.cbf_alpha = 2.0
