@@ -26,7 +26,7 @@ class Config:
         self.env.dt = 0.1
         self.env.max_steps = 400
         self.env.sensing_radius = 20.0
-        self.env.max_obstacles_obs = 1
+        self.env.max_obstacles_obs = 20
         self.env.normalize_obs = False
         # For pure RL + unicycle only:
         # when enabled, policy outputs [vx, vy], env.step converts to [v, omega].

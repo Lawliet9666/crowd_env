@@ -365,4 +365,4 @@ Robot-related config is under `config.robot` in `config/config.py`:
 | `unicycle` | `[v, omega]` | `radius`, `vmax`, `omega_max` | `v` clipped to `[-vmax, vmax]`, `omega` clipped to `[-omega_max, omega_max]`. |
 
 Extra note for RL with unicycle:
-- If `config.env.rl_xy_to_unicycle=True`, policy outputs `[vx, vy]` and env converts it to `[v, omega]` internally.
+- If `config.env.rl_xy_to_unicycle=True`, policy outputs `[vx, vy]` and env converts it to `[v, omega]` internally. and in this case, the traing curve is a slow than  `[v, omega]`.

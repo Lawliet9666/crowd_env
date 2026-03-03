@@ -9,7 +9,7 @@ import imageio
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from crowd_sim.utils import absolute_obs_to_relative
+from crowd_sim.utils import absolute_obs_to_polar, absolute_obs_to_relative
 
 
 class RLEvalActorAdapter:
@@ -44,8 +44,26 @@ def resolve_episode_seed(base_seed, episode_index):
     return int(base_seed) + int(episode_index)
 
 
-def _compute_action(actor, obs):
-    obs = absolute_obs_to_relative(obs)
+def _preprocess_obs(obs, obs_preprocess="relative", obs_topk=5, obs_farest_dist=5.0):
+    mode = str(obs_preprocess).lower()
+    if mode == "relative":
+        return absolute_obs_to_relative(obs, topk=obs_topk)
+    if mode == "polar":
+        return absolute_obs_to_polar(obs, topk=obs_topk, farest_dist=obs_farest_dist)
+    if mode in ("none", "raw"):
+        return np.asarray(obs, dtype=np.float32).reshape(-1)
+    raise ValueError(
+        f"Unknown obs_preprocess '{obs_preprocess}'. Expected one of: relative, polar, none, raw."
+    )
+
+
+def _compute_action(actor, obs, obs_preprocess="relative", obs_topk=5, obs_farest_dist=5.0):
+    obs = _preprocess_obs(
+        obs,
+        obs_preprocess=obs_preprocess,
+        obs_topk=obs_topk,
+        obs_farest_dist=obs_farest_dist,
+    )
     if hasattr(actor, "deterministic"):
         actor.deterministic = True
     out = actor.get_action(obs)
@@ -295,6 +313,9 @@ def run_one_episode(
     track_signals=False,
     unom_holder=None,
     collect_frames=False,
+    obs_preprocess="relative",
+    obs_topk=5,
+    obs_farest_dist=5.0,
 ):
     """Run a single episode and return step-level and episode-level results."""
     if seed is None and reset_options is None:
@@ -320,7 +341,13 @@ def run_one_episode(
         if collect_frames:
             _render_step(env, frames)
 
-        action = _compute_action(actor, obs)
+        action = _compute_action(
+            actor,
+            obs,
+            obs_preprocess=obs_preprocess,
+            obs_topk=obs_topk,
+            obs_farest_dist=obs_farest_dist,
+        )
         _record_actor_metrics(metrics, actor, action, unom_holder)
         if bool(getattr(actor, "infeasible", False)):
             ep_infeasible = True
@@ -356,6 +383,9 @@ def eval_policy(
     save_path=None,
     base_seed=None,
     method=None,
+    obs_preprocess="relative",
+    obs_topk=5,
+    obs_farest_dist=5.0,
     visualize_episodes=20,
 ):
     total_episodes = 0
@@ -383,6 +413,9 @@ def eval_policy(
                 track_signals=track_signals,
                 unom_holder=unom_holder,
                 collect_frames=True,
+                obs_preprocess=obs_preprocess,
+                obs_topk=obs_topk,
+                obs_farest_dist=obs_farest_dist,
             )
             ep_len = result["ep_len"]
             ep_ret = result["ep_ret"]
@@ -459,6 +492,9 @@ def eval_policy(
                 "max_episodes": max_episodes,
                 "base_seed": base_seed,
                 "method": mode,
+                "obs_preprocess": str(obs_preprocess).lower(),
+                "obs_topk": int(obs_topk),
+                "obs_farest_dist": float(obs_farest_dist),
             },
             "results": summary,
         }
@@ -466,7 +502,14 @@ def eval_policy(
             json.dump(log_payload, f, indent=2)
 
 
-def run_crossing_scenario(policy, env, save_path=None):
+def run_crossing_scenario(
+    policy,
+    env,
+    save_path=None,
+    obs_preprocess="relative",
+    obs_topk=5,
+    obs_farest_dist=5.0,
+):
     actor = policy
     result = run_one_episode(
         actor=actor,
@@ -476,6 +519,9 @@ def run_crossing_scenario(policy, env, save_path=None):
         track_signals=False,
         unom_holder=None,
         collect_frames=True,
+        obs_preprocess=obs_preprocess,
+        obs_topk=obs_topk,
+        obs_farest_dist=obs_farest_dist,
     )
     frames = result["frames"]
     is_collision = bool(result["ep_collision"])

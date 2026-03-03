@@ -3,7 +3,8 @@ import argparse
 def get_args():
 	parser = argparse.ArgumentParser()
 
-	parser.add_argument('--mode', dest='mode', type=str, default='train')              # can be 'train' or 'test'
+	parser.add_argument('--mode', dest='mode', type=str, default='train', choices=['train', 'test'])  # can be 'train' or 'test'
+	parser.add_argument('--algo', dest='algo', type=str, default='ppo', choices=['ppo', 'sac'], help='RL algorithm to run')
 	parser.add_argument('--actor_model', dest='actor_model', type=str, default='')     # for test mode: trained_models/rl/ppo_actor.pth
 	parser.add_argument('--critic_model', dest='critic_model', type=str, default='')  	 # for test mode: trained_models/rl/ppo_critic.pth
 	parser.add_argument(
@@ -13,10 +14,10 @@ def get_args():
 		default='rl',
 		choices=[
 			'rl',
-			'rlcbfgamma', 'rlcvarbetaradius',
-			'orca', 'social_force', 'nominal', 'cbfqp', 'cvarqp', 'adapcvarqp', 'drcvarqp'
+			'rlcbf', 'rlcbfgamma',
+			'rlcvar', 'rlcvarbeta', 'rlcvarbetaradius',
 		],
-		help='rl, rlcbfgamma, rlcvarbetaradius, orca, social_force, nominal, cbfqp, cvarqp, adapcvarqp, drcvarqp'
+		help='main_vec RL policy class: rl, rlcbf, rlcbfgamma, rlcvar, rlcvarbeta, rlcvarbetaradius'
 	)
 	parser.add_argument(
 		'--test_mode',
@@ -25,12 +26,41 @@ def get_args():
 		choices=['eval', 'crossing', 'both'],
 		help='For test mode: run batch eval_policy, run_crossing_scenario, or both'
 	)
+	parser.add_argument(
+		'--obs_preprocess',
+		type=str,
+		default='relative',
+		choices=['relative', 'polar', 'none', 'raw'],
+		help='Observation preprocessing mode before policy input'
+	)
+	parser.add_argument(
+		'--obs_topk',
+		'--polar_topk',
+		dest='obs_topk',
+		type=int,
+		default=5,
+		help='Top-k obstacles used by relative/polar observation preprocessing (legacy alias: --polar_topk)'
+	)
+	parser.add_argument(
+		'--obs_farest_dist',
+		'--polar_farest_dist',
+		dest='obs_farest_dist',
+		type=float,
+		default=5.0,
+		help='Distance cap/padding value for polar observation preprocessing (legacy alias: --polar_farest_dist)'
+	)
 
 	# -------------------------------------------------------------------------
 	# COMMON optimization/logging arguments (shared by SAC and PPO)
 	# -------------------------------------------------------------------------
 	parser.add_argument('--total_timesteps', type=int, default=20_000_000, help='Total timesteps of the training')
 	parser.add_argument('--gamma', type=float, default=0.99)
+	parser.add_argument(
+		'--num_envs',
+		type=int,
+		default=8,
+		help='Number of vectorized environments for main_vec.py (0 = use cpu_count)'
+	)
 
 	# -------------------------------------------------------------------------
 	# PPO-only arguments
@@ -47,7 +77,7 @@ def get_args():
 	parser.add_argument('--max_grad_norm', type=float, default=0.5)
 	parser.add_argument('--action_std_init', type=float, default=0.5, help='Initial action std')
 
-	parser.add_argument('--eval_freq_timesteps', type=int, default=200_000, help='Frequency of periodic evaluation in timesteps (set <=0 to disable)')
+	parser.add_argument('--eval_freq_timesteps', type=int, default=4_000, help='Frequency of periodic evaluation in timesteps (set <=0 to disable)')
 	parser.add_argument('--eval_episodes', type=int, default=50, help='Episodes per periodic training evaluation')
 	# -------------------------------------------------------------------------
 	# SAC-only arguments

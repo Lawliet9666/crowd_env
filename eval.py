@@ -308,7 +308,7 @@ def main():
         cfg.human.num_humans = human_count
 
     method = args.method
-    cfg.env.rl_xy_to_unicycle = bool(method == "rl" and cfg.robot.type == "unicycle")
+    # cfg.env.rl_xy_to_unicycle = bool(method == "rl" and cfg.robot.type == "unicycle")
     env_name = cfg.env.get("name", "social_nav_var_num")
 
     is_rl_method = _needs_rl_adapter(method)

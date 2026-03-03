@@ -310,14 +310,6 @@ def build_env(
     from crowd_sim.env.social_nav import SocialNav
     from crowd_sim.env.social_nav_var_num import SocialNavVarNum
 
-    mode = str(obs_preprocess).lower()
-    if mode not in ("relative", "polar", "none", "raw"):
-        raise ValueError(
-            f"Unknown obs_preprocess '{obs_preprocess}'. Expected one of: relative, polar, none, raw."
-        )
-    _ = int(obs_topk)
-    _ = float(obs_farest_dist)
-
     if env_name == "social_nav":
         return SocialNav(render_mode=render_mode, config_file=config)
     if env_name == "social_nav_var_num":
