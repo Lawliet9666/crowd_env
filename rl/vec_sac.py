@@ -76,8 +76,8 @@ class VecSAC(SAC):
         batch_lens = []
         batch_rews = []
 
-        obs, _ = self.env.reset()
-        obs = self._to_policy_obs(obs)
+        obs_raw, _ = self.env.reset()
+        obs_actor, obs_qp = self._preprocess_obs_pair(obs_raw)
         ep_lens = np.zeros(self.num_envs, dtype=np.int32)
         ep_rets = np.zeros(self.num_envs, dtype=np.float32)
 
@@ -91,24 +91,41 @@ class VecSAC(SAC):
                 ).astype(np.float32)
             else:
                 with torch.no_grad():
-                    obs_t = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
-                    action_t, _, _ = self._sample_action(obs_t, deterministic=False)
+                    obs_t = torch.as_tensor(obs_actor, dtype=torch.float32, device=self.device)
+                    obs_qp_t = None
+                    if obs_qp is not None:
+                        obs_qp_t = torch.as_tensor(obs_qp, dtype=torch.float32, device=self.device)
+                    action_t, _, _ = self._sample_action(obs_t, obs_qp=obs_qp_t, deterministic=False)
                     actions = action_t.detach().cpu().numpy().astype(np.float32)
 
-            next_obs, rews, terminations, truncations, infos = self.env.step(actions)
+            next_obs_raw, rews, terminations, truncations, infos = self.env.step(actions)
             dones = np.logical_or(terminations, truncations)
+            next_obs_actor, next_obs_qp = self._preprocess_obs_pair(next_obs_raw)
 
             for i in range(self.num_envs):
-                transition_next_obs = next_obs[i]
+                transition_next_obs_actor = next_obs_actor[i]
+                transition_next_obs_qp = None if next_obs_qp is None else next_obs_qp[i]
                 if bool(dones[i]):
                     final_obs = self._extract_final_observation(infos, i)
                     if final_obs is not None:
-                        transition_next_obs = final_obs
-                transition_next_obs = self._to_policy_obs(transition_next_obs)
+                        final_obs_actor, final_obs_qp = self._preprocess_obs_pair(final_obs)
+                        transition_next_obs_actor = final_obs_actor
+                        if next_obs_qp is not None:
+                            transition_next_obs_qp = final_obs_qp
 
-                self.replay_buffer.add(obs[i], actions[i], rews[i], transition_next_obs, float(dones[i]))
+                transition_obs_qp = None if obs_qp is None else obs_qp[i]
+                self.replay_buffer.add(
+                    obs_actor[i],
+                    actions[i],
+                    rews[i],
+                    transition_next_obs_actor,
+                    float(dones[i]),
+                    obs_qp=transition_obs_qp,
+                    next_obs_qp=transition_next_obs_qp,
+                )
 
-                barrier_val = self._barrier_from_obs(transition_next_obs)
+                barrier_source = transition_next_obs_qp if transition_next_obs_qp is not None else transition_next_obs_actor
+                barrier_val = self._barrier_from_obs(barrier_source)
                 if not np.isnan(barrier_val):
                     self.logger["barrier_vals"].append(float(barrier_val))
 
@@ -127,7 +144,8 @@ class VecSAC(SAC):
                     ep_lens[i] = 0
                     ep_rets[i] = 0.0
 
-            obs = self._to_policy_obs(next_obs)
+            obs_actor = next_obs_actor
+            obs_qp = next_obs_qp
             step_incr = self.num_envs
             env_steps_collected += step_incr
             self._env_steps_total += step_incr

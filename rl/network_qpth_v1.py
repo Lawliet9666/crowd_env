@@ -9,8 +9,9 @@ from rl.my_classes import test_solver as solver
 
 class BarrierNet(nn.Module):
     def __init__(self, 
-                 nFeatures, 
-                 nCls,
+                 obs_dim,
+                 act_dim,
+                 qp_obs_dim,
                  nHidden1 = 256, 
                  nHidden21 = 256, 
                  nHidden22 = 256, 
@@ -19,19 +20,25 @@ class BarrierNet(nn.Module):
                  beta = 0.2,
                  robot_type='single_integrator',
                  vmax = 3.0, amax = 3.0, omega_max = 3.0,
-                 slack_weight=10.0):
+                 slack_weight=10.0,
+                 **kwargs):
         super().__init__()
-        self.nFeatures = nFeatures
         self.nHidden1 = nHidden1
         self.nHidden21 = nHidden21
         self.nHidden22 = nHidden22
-        self.nCls = nCls
+        self.nCls = int(act_dim)
         
         self.safe_dist = safe_dist
         self.robot_type = robot_type
         self.slack_weight = slack_weight
         self.alpha = alpha
-
+        self.actor_obs_dim = int(obs_dim)
+        self.qp_obs_dim = int(qp_obs_dim)
+        if self.qp_obs_dim <= 6 or (self.qp_obs_dim - 6) % 6 != 0:
+            raise ValueError(
+                f"BarrierNet(v1) invalid qp_obs_dim={self.qp_obs_dim}. Expected 6 + 6*K with K>=1."
+            )
+        self.obs_topk = int((self.qp_obs_dim - 6) // 6)
         self.last_alpha = alpha
 
         if self.robot_type == 'single_integrator':
@@ -52,30 +59,46 @@ class BarrierNet(nn.Module):
             self._cbf_name = "unknown"
 
         print(
-            f"[CBFNet] robot_type={self.robot_type}, safe_dist={self.safe_dist:.3f}, umax={self.u_max}",
+            f"[CBFNet] robot_type={self.robot_type}, safe_dist={self.safe_dist:.3f}, umax={self.u_max}, obs_topk={self.obs_topk}, actor_input=polar",
             flush=True,
         )
         self._qp_warm_start = None
         # self.predictor = TrajPredictor()
 
-        self.fc1 = nn.Linear(nFeatures, nHidden1)
+        self.fc1 = nn.Linear(self.actor_obs_dim, nHidden1)
         self.fc21 = nn.Linear(nHidden1, nHidden21) 
         self.fc22 = nn.Linear(nHidden1, nHidden22) 
-        self.fc31 = nn.Linear(nHidden21, nCls) 
+        self.fc31 = nn.Linear(nHidden21, self.nCls) 
         self.fc32 = nn.Linear(nHidden22, 1) 
 
-    def forward(self, obs):
-        if isinstance(obs, np.ndarray):
-            obs = torch.tensor(obs, dtype=torch.float)
-        
-        obs = obs.to(self.fc1.weight.device)
+    def forward(self, obs_actor, obs_qp=None):
+        if isinstance(obs_actor, np.ndarray):
+            obs_actor = torch.tensor(obs_actor, dtype=torch.float)
+        if obs_qp is None:
+            raise ValueError("BarrierNet(v1) requires dual input: obs_actor (polar) and obs_qp (relative).")
+        if isinstance(obs_qp, np.ndarray):
+            obs_qp = torch.tensor(obs_qp, dtype=torch.float)
 
-        if obs.dim() == 1:
-            obs = obs.unsqueeze(0)
+        obs_actor = obs_actor.to(self.fc1.weight.device)
+        obs_qp = obs_qp.to(self.fc1.weight.device)
 
-        obs = obs.reshape(obs.size(0), -1)
+        if obs_actor.dim() == 1:
+            obs_actor = obs_actor.unsqueeze(0)
+        if obs_qp.dim() == 1:
+            obs_qp = obs_qp.unsqueeze(0)
 
-        x = F.relu(self.fc1(obs))
+        obs_actor = obs_actor.reshape(obs_actor.size(0), -1)
+        obs_qp = obs_qp.reshape(obs_qp.size(0), -1)
+        if obs_actor.size(1) != self.actor_obs_dim:
+            raise ValueError(
+                f"BarrierNet(v1) expected obs_actor dim={self.actor_obs_dim}, got {obs_actor.size(1)}."
+            )
+        if obs_qp.size(1) != self.qp_obs_dim:
+            raise ValueError(
+                f"BarrierNet(v1) expected obs_qp dim={self.qp_obs_dim}, got {obs_qp.size(1)}."
+            )
+
+        x = F.relu(self.fc1(obs_actor))
         x21 = F.relu(self.fc21(x))
         x22 = F.relu(self.fc22(x))
         
@@ -89,9 +112,9 @@ class BarrierNet(nn.Module):
 
         # BarrierNet dispatch based on robot type
         if self.robot_type == 'single_integrator':
-            x = self.dCBF_SI(obs, unom, alpha)
+            x = self.dCBF_SI(obs_qp, unom, alpha)
         elif self.robot_type == 'unicycle':
-            x = self.dCBF_Unicycle(obs, unom, alpha)
+            x = self.dCBF_Unicycle(obs_qp, unom, alpha)
         elif self.robot_type == 'unicycle_dynamic':
             # unicycle_dynamic path intentionally disabled.
             x = torch.zeros_like(unom)
@@ -141,35 +164,16 @@ class BarrierNet(nn.Module):
         return torch.tensor(values, device=device, dtype=dtype)
 
     def _extract_obstacle_blocks(self, obs):
-        """
-        Parse obstacle observations to a fixed tensor form:
-          rel:  (B, K, 2)   [p_r - p_h]
-          vel:  (B, K, 2)   [v_hx, v_hy]
-          mask: (B, K)      1 real / 0 dummy
-
-        Supports:
-        1) New local-sensing format: [robot(6), K * (rel_x, rel_y, vx, vy, radius, mask)]
-        2) Legacy single-obstacle format: [robot(6), rel_x, rel_y, vx, vy, radius]
-        """
+        """Parse fixed relative QP observation: [robot(6), K * (rel_x, rel_y, vx, vy, radius, mask)]."""
         nBatch = obs.size(0)
-        device = obs.device
-        dtype = obs.dtype
-
-        if obs.size(1) >= 12 and ((obs.size(1) - 6) % 6 == 0):
-            blocks = obs[:, 6:].reshape(nBatch, -1, 6)
-            rel = blocks[:, :, 0:2]
-            vel = blocks[:, :, 2:4]
-            mask = blocks[:, :, 5].clamp(0.0, 1.0)
-        elif obs.size(1) >= 11:
-            rel = obs[:, 6:8].unsqueeze(1)
-            vel = obs[:, 8:10].unsqueeze(1)
-            mask = torch.ones((nBatch, 1), device=device, dtype=dtype)
-        else:
-            # Fallback: disabled dummy obstacle so constraints become 0 <= 0
-            rel = torch.zeros((nBatch, 1, 2), device=device, dtype=dtype)
-            vel = torch.zeros((nBatch, 1, 2), device=device, dtype=dtype)
-            mask = torch.zeros((nBatch, 1), device=device, dtype=dtype)
-
+        if obs.size(1) != self.qp_obs_dim:
+            raise ValueError(
+                f"BarrierNet(v1) expected relative obs_qp dim={self.qp_obs_dim}, got {obs.size(1)}."
+            )
+        blocks = obs[:, 6:].reshape(nBatch, self.obs_topk, 6)
+        rel = blocks[:, :, 0:2]
+        vel = blocks[:, :, 2:4]
+        mask = blocks[:, :, 5].clamp(0.0, 1.0)
         return rel, vel, mask
     
     def dCBF_SI(self, obs, unom, alpha):
@@ -260,10 +264,12 @@ class BarrierNet(nn.Module):
         p = torch.cat([-2 * unom, torch.zeros(nBatch, 1, device=device)], dim=1)
         Q = 2 * Q
 
-        rel_x = obs[:, 6]
-        rel_y = obs[:, 7]
-        v_hx = obs[:, 8]
-        v_hy = obs[:, 9]
+        rel, vel, mask = self._extract_obstacle_blocks(obs)
+        rel_x = rel[:, 0, 0]
+        rel_y = rel[:, 0, 1]
+        v_hx = vel[:, 0, 0]
+        v_hy = vel[:, 0, 1]
+        active = mask[:, 0]
 
         R_safe = self.safe_dist
         dist_sq = rel_x**2 + rel_y**2
@@ -274,8 +280,11 @@ class BarrierNet(nn.Module):
         lf = -2 * rel_x * v_hx - 2 * rel_y * v_hy
 
         # -Lg*u - s <= Lf + alpha*h
-        G_cbf = torch.stack([-lg1, -lg2, -torch.ones_like(lg1)], dim=1).to(device).unsqueeze(1)
-        h_qp = (lf + alpha * barrier).unsqueeze(1).to(device)
+        G_cbf = torch.stack(
+            [-(lg1 * active), -(lg2 * active), -active],
+            dim=1,
+        ).to(device).unsqueeze(1)
+        h_qp = ((lf + alpha * barrier) * active).unsqueeze(1).to(device)
 
         # Enforce s >= 0  ->  -s <= 0
         G_slack = torch.tensor([0.0, 0.0, -1.0], device=device).unsqueeze(0).unsqueeze(0).expand(nBatch, 1, 3)

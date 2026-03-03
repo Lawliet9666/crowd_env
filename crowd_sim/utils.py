@@ -55,6 +55,13 @@ def polar_obs_dim_from_env_dim(obs_dim: int, topk=None) -> int:
     return dim
 
 
+def hybrid_obs_dim_from_env_dim(obs_dim: int, topk=None) -> int:
+    return int(
+        relative_obs_dim_from_env_dim(obs_dim, topk=topk)
+        + polar_obs_dim_from_env_dim(obs_dim, topk=topk)
+    )
+
+
 def absolute_obs_to_relative(obs, topk=None):
     """
     Convert observation from absolute format to legacy relative format.
@@ -235,6 +242,24 @@ def absolute_obs_batch_to_polar(obs_batch, topk: int = 5, farest_dist: float = 5
         raise ValueError(f"Expected obs batch with ndim 1 or 2, got shape {arr.shape}")
     return np.stack(
         [absolute_obs_to_polar(row, topk=topk, farest_dist=farest_dist) for row in arr],
+        axis=0,
+    )
+
+
+def absolute_obs_to_hybrid(obs, topk: int = 5, farest_dist: float = 5.0):
+    rel = absolute_obs_to_relative(obs, topk=topk)
+    polar = absolute_obs_to_polar(obs, topk=topk, farest_dist=farest_dist)
+    return np.concatenate([rel, polar], axis=0).astype(np.float32)
+
+
+def absolute_obs_batch_to_hybrid(obs_batch, topk: int = 5, farest_dist: float = 5.0):
+    arr = np.asarray(obs_batch, dtype=np.float32)
+    if arr.ndim == 1:
+        return absolute_obs_to_hybrid(arr, topk=topk, farest_dist=farest_dist)
+    if arr.ndim != 2:
+        raise ValueError(f"Expected obs batch with ndim 1 or 2, got shape {arr.shape}")
+    return np.stack(
+        [absolute_obs_to_hybrid(row, topk=topk, farest_dist=farest_dist) for row in arr],
         axis=0,
     )
 

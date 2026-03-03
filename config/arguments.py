@@ -14,10 +14,10 @@ def get_args():
 		default='rl',
 		choices=[
 			'rl',
-			'rlcbf', 'rlcbfgamma',
-			'rlcvar', 'rlcvarbeta', 'rlcvarbetaradius',
+			'rlcbfgamma',
+			'rlcvarbetaradius',
 		],
-		help='main_vec RL policy class: rl, rlcbf, rlcbfgamma, rlcvar, rlcvarbeta, rlcvarbetaradius'
+		help='main_vec RL policy class: rl, rlcbfgamma, rlcvarbetaradius'
 	)
 	parser.add_argument(
 		'--test_mode',
@@ -27,27 +27,16 @@ def get_args():
 		help='For test mode: run batch eval_policy, run_crossing_scenario, or both'
 	)
 	parser.add_argument(
-		'--obs_preprocess',
-		type=str,
-		default='relative',
-		choices=['relative', 'polar', 'none', 'raw'],
-		help='Observation preprocessing mode before policy input'
-	)
-	parser.add_argument(
 		'--obs_topk',
-		'--polar_topk',
-		dest='obs_topk',
 		type=int,
 		default=5,
-		help='Top-k obstacles used by relative/polar observation preprocessing (legacy alias: --polar_topk)'
+		help='Top-k obstacles used by observation preprocessing'
 	)
 	parser.add_argument(
 		'--obs_farest_dist',
-		'--polar_farest_dist',
-		dest='obs_farest_dist',
 		type=float,
 		default=5.0,
-		help='Distance cap/padding value for polar observation preprocessing (legacy alias: --polar_farest_dist)'
+		help='Distance cap/padding value for polar observation preprocessing'
 	)
 
 	# -------------------------------------------------------------------------
@@ -66,12 +55,12 @@ def get_args():
 	# PPO-only arguments
 	# -------------------------------------------------------------------------
 	parser.add_argument('--n_updates_per_iteration', type=int, default=8, help='Number of epochs to update the policy per iteration')
-	parser.add_argument('--timesteps_per_batch', type=int, default=4096)
+	parser.add_argument('--timesteps_per_batch', type=int, default=8192)
 	parser.add_argument('--lr', type=float, default=1e-4)
 	parser.add_argument('--clip', type=float, default=0.2)
 
 	parser.add_argument('--lam', type=float, default=0.98, help='Lambda Parameter for GAE')
-	parser.add_argument('--num_minibatches', type=int, default=8)
+	parser.add_argument('--num_minibatches', type=int, default=16)
 	parser.add_argument('--ent_coef', type=float, default=0.01, help='Entropy coefficient')
 	parser.add_argument('--target_kl', type=float, default=0.02, help='KL Divergence threshold')
 	parser.add_argument('--max_grad_norm', type=float, default=0.5)
@@ -93,8 +82,8 @@ def get_args():
 	parser.add_argument('--sac_critic_lr', type=float, default=5e-4)
 	parser.add_argument('--sac_max_grad_norm', type=float, default=1.0, help='Gradient clipping norm for SAC')
 
-	parser.add_argument('--no_auto_alpha', dest='sac_auto_alpha', action='store_false', default=True, help='Disable automatic entropy temperature tuning')
-	parser.add_argument('--sac_alpha', type=float, default=0.10, help='Initial/fixed entropy temperature')
+	parser.add_argument('--sac_auto_alpha', action='store_true', default=False, help='Enable automatic entropy temperature tuning')
+	parser.add_argument('--sac_alpha', type=float, default=0.0010, help='Initial/fixed entropy temperature')
 	parser.add_argument('--sac_alpha_lr', type=float, default=3e-4, help='Learning rate for temperature when auto_alpha is enabled')
 	parser.add_argument('--sac_target_entropy', type=float, default=-1.2, help='Target entropy for auto_alpha')
 	parser.add_argument('--sac_action_std_init', type=float, default=0.20, help='Initial policy std (before tanh squash)')

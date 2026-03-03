@@ -10,7 +10,7 @@ class ResidualMLPBlock(nn.Module):
         self.fc2 = nn.Linear(hidden_dim, in_dim)
 
     def forward(self, x):
-        out = self.fc2(F.relu(self.fc1(x)))
+        out = self.fc2(F.silu(self.fc1(x)))
         return x + out
     
 class FCNet(nn.Module):
@@ -61,8 +61,8 @@ class FCNet(nn.Module):
         # assert obs.shape[1] == self.nFeatures, \
         #     f"Expected obs feature dim {self.nFeatures}, got {obs.shape[1]}"
 
-        x = F.relu(self.fc1(obs))
-        x21 = F.relu(self.fc21(x))
+        x = F.silu(self.fc1(obs))
+        x21 = F.silu(self.fc21(x))
         x31 = self.fc31(x21)
         
         return x31

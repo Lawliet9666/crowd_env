@@ -25,9 +25,18 @@ class RLEvalActorAdapter:
         self.deterministic = True
 
     def get_action(self, obs):
-        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
+        obs_qp_t = None
+        if isinstance(obs, (tuple, list)) and len(obs) == 2:
+            obs_actor, obs_qp = obs
+            obs_t = torch.as_tensor(obs_actor, dtype=torch.float32, device=self.device)
+            obs_qp_t = torch.as_tensor(obs_qp, dtype=torch.float32, device=self.device)
+        else:
+            obs_t = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
         with torch.no_grad():
-            mean = self.actor(obs_t)
+            if obs_qp_t is None:
+                mean = self.actor(obs_t)
+            else:
+                mean = self.actor(obs_t, obs_qp_t)
         if torch.is_tensor(mean):
             mean = mean.detach().cpu().numpy()
         mean = np.asarray(mean, dtype=np.float32).reshape(-1)
@@ -44,25 +53,20 @@ def resolve_episode_seed(base_seed, episode_index):
     return int(base_seed) + int(episode_index)
 
 
-def _preprocess_obs(obs, obs_preprocess="relative", obs_topk=5, obs_farest_dist=5.0):
-    mode = str(obs_preprocess).lower()
-    if mode == "relative":
-        return absolute_obs_to_relative(obs, topk=obs_topk)
-    if mode == "polar":
-        return absolute_obs_to_polar(obs, topk=obs_topk, farest_dist=obs_farest_dist)
-    if mode in ("none", "raw"):
-        return np.asarray(obs, dtype=np.float32).reshape(-1)
-    raise ValueError(
-        f"Unknown obs_preprocess '{obs_preprocess}'. Expected one of: relative, polar, none, raw."
-    )
+def _preprocess_obs(obs, obs_topk=5, obs_farest_dist=5.0, needs_qp_relative=False):
+    obs_polar = absolute_obs_to_polar(obs, topk=obs_topk, farest_dist=obs_farest_dist)
+    if not bool(needs_qp_relative):
+        return obs_polar
+    obs_rel = absolute_obs_to_relative(obs, topk=obs_topk)
+    return (obs_polar, obs_rel)
 
 
-def _compute_action(actor, obs, obs_preprocess="relative", obs_topk=5, obs_farest_dist=5.0):
+def _compute_action(actor, obs, obs_topk=5, obs_farest_dist=5.0, needs_qp_relative=False):
     obs = _preprocess_obs(
         obs,
-        obs_preprocess=obs_preprocess,
         obs_topk=obs_topk,
         obs_farest_dist=obs_farest_dist,
+        needs_qp_relative=needs_qp_relative,
     )
     if hasattr(actor, "deterministic"):
         actor.deterministic = True
@@ -313,9 +317,9 @@ def run_one_episode(
     track_signals=False,
     unom_holder=None,
     collect_frames=False,
-    obs_preprocess="relative",
     obs_topk=5,
     obs_farest_dist=5.0,
+    needs_qp_relative=False,
 ):
     """Run a single episode and return step-level and episode-level results."""
     if seed is None and reset_options is None:
@@ -344,9 +348,9 @@ def run_one_episode(
         action = _compute_action(
             actor,
             obs,
-            obs_preprocess=obs_preprocess,
             obs_topk=obs_topk,
             obs_farest_dist=obs_farest_dist,
+            needs_qp_relative=needs_qp_relative,
         )
         _record_actor_metrics(metrics, actor, action, unom_holder)
         if bool(getattr(actor, "infeasible", False)):
@@ -383,9 +387,9 @@ def eval_policy(
     save_path=None,
     base_seed=None,
     method=None,
-    obs_preprocess="relative",
     obs_topk=5,
     obs_farest_dist=5.0,
+    needs_qp_relative=False,
     visualize_episodes=20,
 ):
     total_episodes = 0
@@ -413,9 +417,9 @@ def eval_policy(
                 track_signals=track_signals,
                 unom_holder=unom_holder,
                 collect_frames=True,
-                obs_preprocess=obs_preprocess,
                 obs_topk=obs_topk,
                 obs_farest_dist=obs_farest_dist,
+                needs_qp_relative=needs_qp_relative,
             )
             ep_len = result["ep_len"]
             ep_ret = result["ep_ret"]
@@ -492,9 +496,9 @@ def eval_policy(
                 "max_episodes": max_episodes,
                 "base_seed": base_seed,
                 "method": mode,
-                "obs_preprocess": str(obs_preprocess).lower(),
                 "obs_topk": int(obs_topk),
                 "obs_farest_dist": float(obs_farest_dist),
+                "needs_qp_relative": bool(needs_qp_relative),
             },
             "results": summary,
         }
@@ -506,9 +510,9 @@ def run_crossing_scenario(
     policy,
     env,
     save_path=None,
-    obs_preprocess="relative",
     obs_topk=5,
     obs_farest_dist=5.0,
+    needs_qp_relative=False,
 ):
     actor = policy
     result = run_one_episode(
@@ -519,9 +523,9 @@ def run_crossing_scenario(
         track_signals=False,
         unom_holder=None,
         collect_frames=True,
-        obs_preprocess=obs_preprocess,
         obs_topk=obs_topk,
         obs_farest_dist=obs_farest_dist,
+        needs_qp_relative=needs_qp_relative,
     )
     frames = result["frames"]
     is_collision = bool(result["ep_collision"])

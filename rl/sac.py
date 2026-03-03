@@ -33,7 +33,7 @@ def _set_seed(seed):
 
 
 class ReplayBuffer:
-    def __init__(self, obs_dim, act_dim, size, device):
+    def __init__(self, obs_dim, act_dim, size, device, qp_obs_dim=0):
         self.device = device
         self.size = int(size)
         self.ptr = 0
@@ -44,25 +44,44 @@ class ReplayBuffer:
         self.act = np.zeros((self.size, act_dim), dtype=np.float32)
         self.rew = np.zeros((self.size, 1), dtype=np.float32)
         self.done = np.zeros((self.size, 1), dtype=np.float32)
+        self.qp_obs_dim = int(qp_obs_dim)
+        if self.qp_obs_dim > 0:
+            self.obs_qp = np.zeros((self.size, self.qp_obs_dim), dtype=np.float32)
+            self.next_obs_qp = np.zeros((self.size, self.qp_obs_dim), dtype=np.float32)
+        else:
+            self.obs_qp = None
+            self.next_obs_qp = None
 
-    def add(self, obs, act, rew, next_obs, done):
+    def add(self, obs, act, rew, next_obs, done, obs_qp=None, next_obs_qp=None):
         self.obs[self.ptr] = np.asarray(obs, dtype=np.float32).reshape(-1)
         self.act[self.ptr] = np.asarray(act, dtype=np.float32).reshape(-1)
         self.rew[self.ptr] = float(rew)
         self.next_obs[self.ptr] = np.asarray(next_obs, dtype=np.float32).reshape(-1)
         self.done[self.ptr] = float(done)
+        if self.obs_qp is not None:
+            if obs_qp is None or next_obs_qp is None:
+                raise ValueError("ReplayBuffer expects qp observations when qp_obs_dim > 0.")
+            self.obs_qp[self.ptr] = np.asarray(obs_qp, dtype=np.float32).reshape(-1)
+            self.next_obs_qp[self.ptr] = np.asarray(next_obs_qp, dtype=np.float32).reshape(-1)
 
         self.ptr = (self.ptr + 1) % self.size
         self.len = min(self.len + 1, self.size)
 
     def sample(self, batch_size):
         idx = np.random.randint(0, self.len, size=batch_size)
+        obs_qp = None
+        next_obs_qp = None
+        if self.obs_qp is not None:
+            obs_qp = torch.as_tensor(self.obs_qp[idx], dtype=torch.float32, device=self.device)
+            next_obs_qp = torch.as_tensor(self.next_obs_qp[idx], dtype=torch.float32, device=self.device)
         return (
             torch.as_tensor(self.obs[idx], dtype=torch.float32, device=self.device),
             torch.as_tensor(self.act[idx], dtype=torch.float32, device=self.device),
             torch.as_tensor(self.rew[idx], dtype=torch.float32, device=self.device),
             torch.as_tensor(self.next_obs[idx], dtype=torch.float32, device=self.device),
             torch.as_tensor(self.done[idx], dtype=torch.float32, device=self.device),
+            obs_qp,
+            next_obs_qp,
         )
 
 
@@ -101,17 +120,12 @@ class SAC:
             act_space = env.action_space
 
         env_obs_dim = int(np.prod(obs_space.shape))
-        mode = str(getattr(self, "obs_preprocess", "relative")).lower()
-        if mode == "relative":
-            self.obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=self.obs_topk))
-        elif mode == "polar":
-            self.obs_dim = int(polar_obs_dim_from_env_dim(env_obs_dim, topk=self.obs_topk))
-        elif mode in ("none", "raw"):
-            self.obs_dim = int(env_obs_dim)
-        else:
-            raise ValueError(
-                f"Unknown obs_preprocess '{self.obs_preprocess}'. Expected one of: relative, polar, none, raw."
-            )
+        self.obs_dim = int(polar_obs_dim_from_env_dim(env_obs_dim, topk=self.obs_topk))
+        self.polar_obs_dim = self.obs_dim
+        self.qp_obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=self.obs_topk))
+        self.use_dual_actor_input = bool(getattr(self, "needs_qp_relative", False))
+        self.actor_obs_dim = self.obs_dim
+        self.critic_obs_dim = self.actor_obs_dim
         self.act_dim = int(np.prod(act_space.shape))
         self.action_low = np.asarray(act_space.low, dtype=np.float32).reshape(-1)
         self.action_high = np.asarray(act_space.high, dtype=np.float32).reshape(-1)
@@ -135,10 +149,10 @@ class SAC:
             torch.full((self.act_dim,), log_std_init, dtype=torch.float32, device=self.device)
         )
 
-        self.q1 = QNetwork(self.obs_dim, self.act_dim, self.hidden_sizes).to(self.device)
-        self.q2 = QNetwork(self.obs_dim, self.act_dim, self.hidden_sizes).to(self.device)
-        self.q1_target = QNetwork(self.obs_dim, self.act_dim, self.hidden_sizes).to(self.device)
-        self.q2_target = QNetwork(self.obs_dim, self.act_dim, self.hidden_sizes).to(self.device)
+        self.q1 = QNetwork(self.critic_obs_dim, self.act_dim, self.hidden_sizes).to(self.device)
+        self.q2 = QNetwork(self.critic_obs_dim, self.act_dim, self.hidden_sizes).to(self.device)
+        self.q1_target = QNetwork(self.critic_obs_dim, self.act_dim, self.hidden_sizes).to(self.device)
+        self.q2_target = QNetwork(self.critic_obs_dim, self.act_dim, self.hidden_sizes).to(self.device)
         self.q1_target.load_state_dict(self.q1.state_dict())
         self.q2_target.load_state_dict(self.q2.state_dict())
 
@@ -164,7 +178,13 @@ class SAC:
             if self.target_entropy is None:
                 self.target_entropy = -float(self.act_dim)
 
-        self.replay_buffer = ReplayBuffer(self.obs_dim, self.act_dim, self.buffer_size, self.device)
+        self.replay_buffer = ReplayBuffer(
+            self.actor_obs_dim,
+            self.act_dim,
+            self.buffer_size,
+            self.device,
+            qp_obs_dim=(self.qp_obs_dim if self.use_dual_actor_input else 0),
+        )
 
         self.logger = {
             "delta_t": time.time_ns(),
@@ -208,8 +228,8 @@ class SAC:
         t_so_far = 0
         next_save_step = self._next_save_step()
 
-        obs, _ = self.env.reset(seed=self.seed)
-        obs = self._to_policy_obs(obs)
+        obs_raw, _ = self.env.reset(seed=self.seed)
+        obs_actor, obs_qp = self._preprocess_obs_pair(obs_raw)
 
         while t_so_far < total_timesteps:
             t_so_far += 1
@@ -219,18 +239,27 @@ class SAC:
             if t_so_far < self.start_timesteps:
                 action = self.env.action_space.sample()
             else:
-                action, _ = self.get_action(obs, deterministic=False)
+                action, _ = self.get_action(obs_actor, obs_qp=obs_qp, deterministic=False, preprocessed=True)
 
-            next_obs, rew, terminated, truncated, info = self.env.step(action)
-            next_obs = self._to_policy_obs(next_obs)
+            next_obs_raw, rew, terminated, truncated, info = self.env.step(action)
+            next_obs_actor, next_obs_qp = self._preprocess_obs_pair(next_obs_raw)
             done = bool(terminated or truncated)
 
-            self.replay_buffer.add(obs, action, rew, next_obs, float(done))
-            obs = next_obs
+            self.replay_buffer.add(
+                obs_actor,
+                action,
+                rew,
+                next_obs_actor,
+                float(done),
+                obs_qp=obs_qp,
+                next_obs_qp=next_obs_qp,
+            )
+            obs_actor = next_obs_actor
+            obs_qp = next_obs_qp
             ep_ret += float(rew)
             ep_len += 1
 
-            barrier_val = self._barrier_from_obs(obs)
+            barrier_val = self._barrier_from_obs(obs_qp if obs_qp is not None else obs_actor)
             if not np.isnan(barrier_val):
                 self.logger["barrier_vals"].append(float(barrier_val))
 
@@ -260,8 +289,8 @@ class SAC:
                     last_eval_episode_count = episode_idx
 
                 reset_seed = None if self.seed is None else int(self.seed) + episode_idx
-                obs, _ = self.env.reset(seed=reset_seed)
-                obs = self._to_policy_obs(obs)
+                obs_raw, _ = self.env.reset(seed=reset_seed)
+                obs_actor, obs_qp = self._preprocess_obs_pair(obs_raw)
                 ep_len = 0
                 ep_ret = 0.0
 
@@ -277,14 +306,22 @@ class SAC:
 
         self._save_models(step=t_so_far)
 
-    def get_action(self, obs, deterministic=None):
+    def get_action(self, obs, obs_qp=None, deterministic=None, preprocessed=False):
         if deterministic is None:
             deterministic = bool(self.deterministic)
 
-        obs_rel = self._to_policy_obs(obs)
-        obs_t = torch.as_tensor(obs_rel, dtype=torch.float32, device=self.device).reshape(1, -1)
+        if preprocessed:
+            obs_actor = np.asarray(obs, dtype=np.float32)
+            obs_qp_arr = None if obs_qp is None else np.asarray(obs_qp, dtype=np.float32)
+        else:
+            obs_actor, obs_qp_arr = self._preprocess_obs_pair(obs)
+
+        obs_t = torch.as_tensor(obs_actor, dtype=torch.float32, device=self.device).reshape(1, -1)
+        obs_qp_t = None
+        if obs_qp_arr is not None:
+            obs_qp_t = torch.as_tensor(obs_qp_arr, dtype=torch.float32, device=self.device).reshape(1, -1)
         with torch.no_grad():
-            action_t, logp_t, mean_t = self._sample_action(obs_t, deterministic=deterministic)
+            action_t, logp_t, mean_t = self._sample_action(obs_t, obs_qp_t, deterministic=deterministic)
 
         if deterministic:
             action_t = mean_t
@@ -296,8 +333,8 @@ class SAC:
             logp = float(logp_t.squeeze(0).detach().cpu().item())
         return action, logp
 
-    def _sample_action(self, obs, deterministic=False):
-        mu = self.actor(obs)
+    def _sample_action(self, obs, obs_qp=None, deterministic=False):
+        mu = self._actor_forward(obs, obs_qp)
         if mu.dim() == 1:
             mu = mu.unsqueeze(0)
         log_std = self.actor_log_std.clamp(LOG_STD_MIN, LOG_STD_MAX).unsqueeze(0).expand_as(mu)
@@ -317,17 +354,29 @@ class SAC:
         logp -= self._log_action_scale
         return action, logp, mean_action
 
+    def _actor_forward(self, obs_actor, obs_qp=None):
+        if not self.use_dual_actor_input:
+            return self.actor(obs_actor)
+        if obs_qp is None:
+            raise ValueError("Hybrid preprocessing requires obs_qp for actor forward.")
+        return self.actor(obs_actor, obs_qp)
+
     def _update_step(self):
-        obs, act, rew, next_obs, done = self.replay_buffer.sample(self.batch_size)
+        obs, act, rew, next_obs, done, obs_qp, next_obs_qp = self.replay_buffer.sample(self.batch_size)
+        obs_critic = self._to_critic_obs(obs)
+        next_obs_critic = self._to_critic_obs(next_obs)
         alpha = self._alpha_tensor()
 
         with torch.no_grad():
-            next_action, next_logp, _ = self._sample_action(next_obs, deterministic=False)
-            q_next = torch.min(self.q1_target(next_obs, next_action), self.q2_target(next_obs, next_action))
+            next_action, next_logp, _ = self._sample_action(next_obs, next_obs_qp, deterministic=False)
+            q_next = torch.min(
+                self.q1_target(next_obs_critic, next_action),
+                self.q2_target(next_obs_critic, next_action),
+            )
             target = rew + self.gamma * (1.0 - done) * (q_next - alpha * next_logp)
 
-        q1_val = self.q1(obs, act)
-        q2_val = self.q2(obs, act)
+        q1_val = self.q1(obs_critic, act)
+        q2_val = self.q2(obs_critic, act)
         critic_loss = F.mse_loss(q1_val, target) + F.mse_loss(q2_val, target)
 
         self.critic_optim.zero_grad()
@@ -337,8 +386,8 @@ class SAC:
             torch.nn.utils.clip_grad_norm_(list(self.q1.parameters()) + list(self.q2.parameters()), self.max_grad_norm)
         self.critic_optim.step()
 
-        action_pi, logp_pi, _ = self._sample_action(obs, deterministic=False)
-        q_pi = torch.min(self.q1(obs, action_pi), self.q2(obs, action_pi))
+        action_pi, logp_pi, _ = self._sample_action(obs, obs_qp, deterministic=False)
+        q_pi = torch.min(self.q1(obs_critic, action_pi), self.q2(obs_critic, action_pi))
         actor_loss = (alpha * logp_pi - q_pi).mean()
 
         self.actor_optim.zero_grad()
@@ -361,7 +410,7 @@ class SAC:
             self._soft_update(self.q2, self.q2_target)
 
         with torch.no_grad():
-            mu = self.actor(obs)
+            mu = self._actor_forward(obs, obs_qp)
             log_std = self.actor_log_std.clamp(LOG_STD_MIN, LOG_STD_MAX)
             sigma = torch.exp(log_std)
 
@@ -504,8 +553,8 @@ class SAC:
 
         for ep in range(episodes):
             eval_seed = None if self.eval_seed is None else int(self.eval_seed) + ep
-            obs, _ = self.eval_env.reset(seed=eval_seed)
-            obs = self._to_policy_obs(obs)
+            obs_raw, _ = self.eval_env.reset(seed=eval_seed)
+            obs_actor, obs_qp = self._preprocess_obs_pair(obs_raw)
 
             done = False
             ep_ret = 0.0
@@ -514,9 +563,9 @@ class SAC:
             ep_collision = False
 
             while not done and ep_len < int(self.max_timesteps_per_episode):
-                action, _ = self.get_action(obs, deterministic=True)
-                obs, rew, terminated, truncated, info = self.eval_env.step(action)
-                obs = self._to_policy_obs(obs)
+                action, _ = self.get_action(obs_actor, obs_qp=obs_qp, deterministic=True, preprocessed=True)
+                obs_raw, rew, terminated, truncated, info = self.eval_env.step(action)
+                obs_actor, obs_qp = self._preprocess_obs_pair(obs_raw)
                 done = bool(terminated or truncated)
                 ep_ret += float(rew)
                 ep_len += 1
@@ -601,7 +650,9 @@ class SAC:
             "vmax": self.vmax,
             "amax": self.amax,
             "omega_max": self.omega_max,
+            "qp_obs_dim": int(self.qp_obs_dim),
         }
+        actor_kwargs.update(getattr(self, "policy_kwargs", {}))
 
         try:
             sig = inspect.signature(policy_class.__init__)
@@ -610,7 +661,7 @@ class SAC:
         except (TypeError, ValueError):
             filtered_kwargs = {}
 
-        return policy_class(self.obs_dim, self.act_dim, **filtered_kwargs)
+        return policy_class(self.actor_obs_dim, self.act_dim, **filtered_kwargs)
 
     @staticmethod
     def _same_state_dict(module_a, module_b):
@@ -640,8 +691,6 @@ class SAC:
         return torch.tensor(self.alpha_value, dtype=torch.float32, device=self.device)
 
     def _barrier_from_obs(self, obs):
-        if str(getattr(self, "obs_preprocess", "relative")).lower() != "relative":
-            return np.nan
         # Observation layout (first obstacle block): idx 6 rel_x, idx 7 rel_y, idx 11 mask.
         obs_arr = np.asarray(obs, dtype=np.float32).reshape(-1)
         if obs_arr.shape[0] >= 12 and obs_arr[11] > 0.5:
@@ -651,20 +700,22 @@ class SAC:
         return np.nan
 
     def _to_policy_obs(self, obs):
-        mode = str(getattr(self, "obs_preprocess", "relative")).lower()
-        if mode == "relative":
-            return absolute_obs_batch_to_relative(obs, topk=self.obs_topk)
-        if mode == "polar":
-            return absolute_obs_batch_to_polar(
-                obs,
-                topk=self.obs_topk,
-                farest_dist=self.obs_farest_dist,
-            )
-        if mode in ("none", "raw"):
-            return np.asarray(obs, dtype=np.float32)
-        raise ValueError(
-            f"Unknown obs_preprocess '{self.obs_preprocess}'. Expected one of: relative, polar, none, raw."
+        obs_actor, _ = self._preprocess_obs_pair(obs)
+        return obs_actor
+
+    def _preprocess_obs_pair(self, obs):
+        obs_polar = absolute_obs_batch_to_polar(
+            obs,
+            topk=self.obs_topk,
+            farest_dist=self.obs_farest_dist,
         )
+        if not self.use_dual_actor_input:
+            return obs_polar, None
+        obs_rel = absolute_obs_batch_to_relative(obs, topk=self.obs_topk)
+        return obs_polar, obs_rel
+
+    def _to_critic_obs(self, obs):
+        return obs
 
     def _init_hyperparameters(self, hyperparameters):
         self.timesteps_per_batch = 2_000
@@ -700,9 +751,9 @@ class SAC:
         self.eval_freq_episodes = 0
         self.eval_episodes = 20
         self.device = torch.device("cpu")
-        self.obs_preprocess = "relative"
         self.obs_topk = 5
         self.obs_farest_dist = 5.0
+        self.needs_qp_relative = False
 
         self.safe_dist = 0.8
         self.cbf_alpha = 2.0

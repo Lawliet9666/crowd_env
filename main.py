@@ -16,6 +16,7 @@ from config.arguments import get_args
 from config.config import Config
 from crowd_sim.utils import (
     build_env,
+    polar_obs_dim_from_env_dim,
     relative_obs_dim_from_env_dim,
     dump_train_config,
     dump_test_config,
@@ -23,6 +24,12 @@ from crowd_sim.utils import (
 from crowd_nav.rl_policy_factory import get_rl_policy_class
 from eval_policy import RLEvalActorAdapter, eval_policy
 from rl.sac import SAC
+
+
+METHOD_NEEDS_QP_RELATIVE = {
+    "rlcbfgamma": True,
+    "rlcvarbetaradius": True,
+}
 
 
 def set_global_seeds(seed):
@@ -33,7 +40,12 @@ def set_global_seeds(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def build_base_hyperparameters(args, config, env_name, max_ep_steps, save_dir, device):
+def resolve_needs_qp_relative(method):
+    method_key = str(method).strip().lower()
+    return bool(METHOD_NEEDS_QP_RELATIVE.get(method_key, False))
+
+
+def build_base_hyperparameters(args, config, env_name, max_ep_steps, save_dir, device, needs_qp_relative):
     return {
         "max_timesteps_per_episode": max_ep_steps,
         "gamma": args.gamma,
@@ -53,6 +65,9 @@ def build_base_hyperparameters(args, config, env_name, max_ep_steps, save_dir, d
         "vmax": config.robot_params["vmax"],
         "amax": config.robot_params["amax"],
         "omega_max": config.robot_params["omega_max"],
+        "obs_topk": args.obs_topk,
+        "obs_farest_dist": args.obs_farest_dist,
+        "needs_qp_relative": bool(needs_qp_relative),
     }
 
 
@@ -85,9 +100,9 @@ def build_sac_hyperparameters(args, base_hyperparameters, config):
     return hyperparameters
 
 
-def _build_policy_kwargs(config):
+def _build_policy_kwargs(method, config):
     gmm_cfg = dict(config.human_params.get("gmm", {}))
-    return {
+    kwargs = {
         "robot_type": config.robot_params["type"],
         "safe_dist": config.controller_params["safety_margin"] + config.human_params["radius"] + config.robot_params["radius"],
         "alpha": config.controller_params["cbf_alpha"],
@@ -99,6 +114,7 @@ def _build_policy_kwargs(config):
         "gmm_stds": gmm_cfg.get("stds"),
         "gmm_lateral_ratio": gmm_cfg.get("lateral_ratio", 0.3),
     }
+    return kwargs
 
 
 def _filter_policy_kwargs(policy_class, policy_kwargs):
@@ -155,7 +171,19 @@ def train(env, method, policy_kwargs, hyperparameters, actor_model, critic_model
     model.learn(total_timesteps=total_timesteps)
 
 
-def test(env, actor_model, device, method, policy_kwargs, test_episodes=50, base_seed=None, save_path=None):
+def test(
+    env,
+    actor_model,
+    device,
+    method,
+    policy_kwargs,
+    obs_topk,
+    obs_farest_dist,
+    needs_qp_relative,
+    test_episodes=50,
+    base_seed=None,
+    save_path=None,
+):
     print(f"Testing {actor_model}", flush=True)
 
     if actor_model == "":
@@ -165,8 +193,11 @@ def test(env, actor_model, device, method, policy_kwargs, test_episodes=50, base
     PolicyClass = get_rl_policy_class(method)
     filtered_policy_kwargs = _filter_policy_kwargs(PolicyClass, policy_kwargs)
     env_obs_dim = int(env.observation_space.shape[0])
-    obs_dim = relative_obs_dim_from_env_dim(env_obs_dim)
+    obs_dim = polar_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk)
+    qp_obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
     act_dim = env.action_space.shape[0]
+    if needs_qp_relative:
+        filtered_policy_kwargs["qp_obs_dim"] = qp_obs_dim
 
     print(f"Policy: {PolicyClass.__name__}, args: {filtered_policy_kwargs}", flush=True)
     policy = PolicyClass(obs_dim, act_dim, **filtered_policy_kwargs).to(device)
@@ -181,6 +212,9 @@ def test(env, actor_model, device, method, policy_kwargs, test_episodes=50, base
         max_episodes=test_episodes,
         save_path=save_path,
         base_seed=base_seed,
+        obs_topk=obs_topk,
+        obs_farest_dist=obs_farest_dist,
+        needs_qp_relative=needs_qp_relative,
     )
 
 
@@ -188,7 +222,8 @@ def main(args):
     set_global_seeds(args.seed)
 
     config = Config()
-    policy_kwargs = _build_policy_kwargs(config)
+    needs_qp_relative = resolve_needs_qp_relative(args.method)
+    policy_kwargs = _build_policy_kwargs(args.method, config)
     env_name = config.env.get("name", "social_nav_var_num")
 
     now = datetime.now()
@@ -215,6 +250,7 @@ def main(args):
         max_ep_steps=max_ep_steps,
         save_dir=save_dir,
         device=device,
+        needs_qp_relative=needs_qp_relative,
     )
     hyperparameters = build_sac_hyperparameters(args, base_hyperparameters, config)
 
@@ -279,6 +315,9 @@ def main(args):
             device=device,
             method=args.method,
             policy_kwargs=policy_kwargs,
+            obs_topk=args.obs_topk,
+            obs_farest_dist=args.obs_farest_dist,
+            needs_qp_relative=needs_qp_relative,
             test_episodes=args.test_ep,
             base_seed=args.eval_seed,
             save_path=test_save_dir,

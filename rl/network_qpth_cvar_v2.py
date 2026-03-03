@@ -23,8 +23,9 @@ def cvar_coeff_from_beta(beta: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     return pdf / beta
 
 class BarrierNet(nn.Module):
-    def __init__(self, nFeatures, 
-                 nCls, 
+    def __init__(self, obs_dim,
+                 act_dim,
+                 qp_obs_dim,
                  nHidden1 = 256, 
                  nHidden21 = 256, 
                  nHidden22 = 256, 
@@ -34,13 +35,19 @@ class BarrierNet(nn.Module):
                  robot_type='single_integrator', vmax=3.0, amax=3.0, omega_max=3.0,
                  gmm_weights=None, gmm_stds=None, gmm_lateral_ratio=0.3, **kwargs):
         super().__init__()
-        self.nFeatures = nFeatures
-        self.nCls = nCls
+        self.nCls = int(act_dim)
 
         self.safe_dist = safe_dist
         self.alpha = alpha   
         self.beta = beta
         self.robot_type = robot_type
+        self.actor_obs_dim = int(obs_dim)
+        self.qp_obs_dim = int(qp_obs_dim)
+        if self.qp_obs_dim <= 6 or (self.qp_obs_dim - 6) % 6 != 0:
+            raise ValueError(
+                f"CVaR-BarrierNet(v2) invalid qp_obs_dim={self.qp_obs_dim}. Expected 6 + 6*K with K>=1."
+            )
+        self.obs_topk = int((self.qp_obs_dim - 6) // 6)
 
         self.last_alpha = alpha
         self.last_beta = beta
@@ -64,7 +71,7 @@ class BarrierNet(nn.Module):
             self._cbf_name = "unknown"
 
         print(
-            f"[CVaRNet v2] robot_type={self.robot_type}, safe_dist={self.safe_dist:.3f}, umax={self.u_max}",
+            f"[CVaRNet v2] robot_type={self.robot_type}, safe_dist={self.safe_dist:.3f}, umax={self.u_max}, obs_topk={self.obs_topk}, actor_input=polar",
             flush=True,
         )
         self.predictor = TrajPredictor(
@@ -73,11 +80,11 @@ class BarrierNet(nn.Module):
             stds=gmm_stds,
         )
 
-        self.fc1 = nn.Linear(nFeatures, nHidden1)
+        self.fc1 = nn.Linear(self.actor_obs_dim, nHidden1)
         self.fc21 = nn.Linear(nHidden1, nHidden21) 
         self.fc22 = nn.Linear(nHidden1, nHidden22)
         self.fc23 = nn.Linear(nHidden1, nHidden22)  # for radius 
-        self.fc31 = nn.Linear(nHidden21, nCls) 
+        self.fc31 = nn.Linear(nHidden21, self.nCls) 
         self.fc32 = nn.Linear(nHidden22, 1) 
         self.fc33 = nn.Linear(nHidden22, 1)  # for radius
 
@@ -87,29 +94,16 @@ class BarrierNet(nn.Module):
           rel:  (B, K, 2)   [p_r - p_h]
           vel:  (B, K, 2)   [v_hx, v_hy]
           mask: (B, K)      1 real / 0 dummy
-
-        Supports:
-        1) New local-sensing format: [robot(6), K * (rel_x, rel_y, vx, vy, radius, mask)]
-        2) Legacy single-obstacle format: [robot(6), rel_x, rel_y, vx, vy, radius]
         """
         nBatch = obs.size(0)
-        device = obs.device
-        dtype = obs.dtype
-
-        if obs.size(1) >= 12 and ((obs.size(1) - 6) % 6 == 0):
-            blocks = obs[:, 6:].reshape(nBatch, -1, 6)
-            rel = blocks[:, :, 0:2]
-            vel = blocks[:, :, 2:4]
-            mask = blocks[:, :, 5].clamp(0.0, 1.0)
-        elif obs.size(1) >= 11:
-            rel = obs[:, 6:8].unsqueeze(1)
-            vel = obs[:, 8:10].unsqueeze(1)
-            mask = torch.ones((nBatch, 1), device=device, dtype=dtype)
-        else:
-            rel = torch.zeros((nBatch, 1, 2), device=device, dtype=dtype)
-            vel = torch.zeros((nBatch, 1, 2), device=device, dtype=dtype)
-            mask = torch.zeros((nBatch, 1), device=device, dtype=dtype)
-
+        if obs.size(1) != self.qp_obs_dim:
+            raise ValueError(
+                f"CVaR-BarrierNet(v2) expected relative obs_qp dim={self.qp_obs_dim}, got {obs.size(1)}."
+            )
+        blocks = obs[:, 6:].reshape(nBatch, self.obs_topk, 6)
+        rel = blocks[:, :, 0:2]
+        vel = blocks[:, :, 2:4]
+        mask = blocks[:, :, 5].clamp(0.0, 1.0)
         return rel, vel, mask
 
     def _predict_gmm_multi(self, human_vel):
@@ -127,17 +121,34 @@ class BarrierNet(nn.Module):
         variances = variances_flat.reshape(bsz, k, m)
         return means, variances
 
-    def forward(self, obs):
+    def forward(self, obs_actor, obs_qp=None):
         # if torch.rand(1).item() < 0.001:
         #      print("DEBUG: BarrierNet v2 Forward")
-        if isinstance(obs, np.ndarray):
-            obs = torch.tensor(obs, dtype=torch.float)
-        obs = obs.to(self.fc1.weight.device)
-        if obs.dim() == 1:
-            obs = obs.unsqueeze(0)
-        obs = obs.reshape(obs.size(0), -1)
+        if isinstance(obs_actor, np.ndarray):
+            obs_actor = torch.tensor(obs_actor, dtype=torch.float)
+        if obs_qp is None:
+            raise ValueError("CVaR-BarrierNet(v2) requires dual input: obs_actor (polar) and obs_qp (relative).")
+        if isinstance(obs_qp, np.ndarray):
+            obs_qp = torch.tensor(obs_qp, dtype=torch.float)
 
-        x = F.relu(self.fc1(obs))
+        obs_actor = obs_actor.to(self.fc1.weight.device)
+        obs_qp = obs_qp.to(self.fc1.weight.device)
+        if obs_actor.dim() == 1:
+            obs_actor = obs_actor.unsqueeze(0)
+        if obs_qp.dim() == 1:
+            obs_qp = obs_qp.unsqueeze(0)
+        obs_actor = obs_actor.reshape(obs_actor.size(0), -1)
+        obs_qp = obs_qp.reshape(obs_qp.size(0), -1)
+        if obs_actor.size(1) != self.actor_obs_dim:
+            raise ValueError(
+                f"CVaR-BarrierNet(v2) expected obs_actor dim={self.actor_obs_dim}, got {obs_actor.size(1)}."
+            )
+        if obs_qp.size(1) != self.qp_obs_dim:
+            raise ValueError(
+                f"CVaR-BarrierNet(v2) expected obs_qp dim={self.qp_obs_dim}, got {obs_qp.size(1)}."
+            )
+
+        x = F.relu(self.fc1(obs_actor))
         x21 = F.relu(self.fc21(x))
         x22 = F.relu(self.fc22(x))
         x23 = F.relu(self.fc23(x))  # reuse fc22 for radius
@@ -154,9 +165,9 @@ class BarrierNet(nn.Module):
         self.last_r_safe = r_safe_learned
 
         if self.robot_type == 'single_integrator':
-            u_safe = self.dCVaR_CBF_SI(obs, u_nom, beta, r_safe_learned)
+            u_safe = self.dCVaR_CBF_SI(obs_qp, u_nom, beta, r_safe_learned)
         elif self.robot_type == 'unicycle':
-            u_safe = self.dCVaR_CBF_Unicycle(obs, u_nom, beta, r_safe_learned)
+            u_safe = self.dCVaR_CBF_Unicycle(obs_qp, u_nom, beta, r_safe_learned)
         elif self.robot_type == 'unicycle_dynamic':
             raise NotImplementedError("dCVaR_CBF_UnicycleDynamic not implemented")
         else:

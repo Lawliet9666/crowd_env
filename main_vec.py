@@ -34,6 +34,12 @@ ALGO_TO_MODEL = {
 }
 
 
+METHOD_NEEDS_QP_RELATIVE = {
+    "rlcbfgamma": True,
+    "rlcvarbetaradius": True,
+}
+
+
 def make_env_fn(config, env_name):
     def _init():
         return build_env(env_name, render_mode=None, config=config)
@@ -49,9 +55,14 @@ def set_global_seeds(seed):
         torch.cuda.manual_seed_all(seed)
 
 
+def resolve_needs_qp_relative(method):
+    method_key = str(method).strip().lower()
+    return bool(METHOD_NEEDS_QP_RELATIVE.get(method_key, False))
+
+
 def get_policy_kwargs(method, config=None):
     kwargs = {}
-    cvar_methods = {"rlcvar", "rlcvarbeta", "rlcvarbetaradius"}
+    cvar_methods = {"rlcvarbetaradius"}
     if config is not None and method in cvar_methods:
         gmm_cfg = dict(config.human_params.get("gmm", {}))
         kwargs.update(
@@ -64,7 +75,7 @@ def get_policy_kwargs(method, config=None):
     return kwargs
 
 
-def build_base_hyperparameters(args, config, env_name, save_dir, device):
+def build_base_hyperparameters(args, config, env_name, save_dir, device, needs_qp_relative):
     return {
         "max_timesteps_per_episode": config.env.max_steps,
         "test_ep": args.test_ep,
@@ -87,9 +98,9 @@ def build_base_hyperparameters(args, config, env_name, save_dir, device):
         "vmax": config.robot_params["vmax"],
         "amax": config.robot_params["amax"],
         "omega_max": config.robot_params["omega_max"],
-        "obs_preprocess": args.obs_preprocess,
         "obs_topk": args.obs_topk,
         "obs_farest_dist": args.obs_farest_dist,
+        "needs_qp_relative": bool(needs_qp_relative),
     }
 
 
@@ -226,20 +237,12 @@ def test(env, actor_model, device, method, hyperparameters, algo, test_mode="bot
     print(f"Algorithm: {algo.upper()}, Policy: {PolicyClass.__name__}", flush=True)
 
     env_obs_dim = int(env.observation_space.shape[0])
-    obs_mode = str(hyperparameters.get("obs_preprocess", "relative")).lower()
     obs_topk = int(hyperparameters.get("obs_topk", 5))
     obs_farest_dist = float(hyperparameters.get("obs_farest_dist", 5.0))
+    needs_qp_relative = bool(hyperparameters.get("needs_qp_relative", False))
 
-    if obs_mode == "relative":
-        obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
-    elif obs_mode == "polar":
-        obs_dim = int(polar_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
-    elif obs_mode in ("none", "raw"):
-        obs_dim = env_obs_dim
-    else:
-        raise ValueError(
-            f"Unknown obs_preprocess '{obs_mode}'. Expected one of: relative, polar, none, raw."
-        )
+    obs_dim = int(polar_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
+    qp_obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
 
     act_dim = env.action_space.shape[0]
     relevant_keys = ["robot_type", "safe_dist", "alpha", "beta", "vmax", "amax", "omega_max", "slack_weight"]
@@ -248,6 +251,8 @@ def test(env, actor_model, device, method, hyperparameters, algo, test_mode="bot
         policy_kwargs["alpha"] = hyperparameters["cbf_alpha"]
     if "beta" not in policy_kwargs and "cvar_beta" in hyperparameters:
         policy_kwargs["beta"] = hyperparameters["cvar_beta"]
+    if needs_qp_relative:
+        policy_kwargs["qp_obs_dim"] = qp_obs_dim
     policy_kwargs.update(hyperparameters.get("policy_kwargs", {}))
 
     print(f"Policy Args: {policy_kwargs}", flush=True)
@@ -268,9 +273,9 @@ def test(env, actor_model, device, method, hyperparameters, algo, test_mode="bot
             save_path=save_path,
             base_seed=eval_seed,
             method=method,
-            obs_preprocess=obs_mode,
             obs_topk=obs_topk,
             obs_farest_dist=obs_farest_dist,
+            needs_qp_relative=needs_qp_relative,
             visualize_episodes=hyperparameters["test_viz_ep"],
         )
 
@@ -279,9 +284,9 @@ def test(env, actor_model, device, method, hyperparameters, algo, test_mode="bot
             actor,
             env,
             save_path=save_path,
-            obs_preprocess=obs_mode,
             obs_topk=obs_topk,
             obs_farest_dist=obs_farest_dist,
+            needs_qp_relative=needs_qp_relative,
         )
 
 
@@ -298,6 +303,12 @@ def main(args):
     else:
         device = torch.device("cpu")
         print("Using CPU.", flush=True)
+
+    needs_qp_relative = resolve_needs_qp_relative(args.method)
+    print(
+        f"Observation pipeline: actor/critic=polar, qp_relative={needs_qp_relative} (method={args.method})",
+        flush=True,
+    )
 
     config = Config()
     # config.env.rl_xy_to_unicycle = bool(args.method == "rl" and config.robot.type == "unicycle")
@@ -318,6 +329,7 @@ def main(args):
         env_name=env_name,
         save_dir=save_dir,
         device=device,
+        needs_qp_relative=needs_qp_relative,
     )
     if args.algo == "sac":
         hyperparameters = build_sac_hyperparameters(args, base_hyperparameters)

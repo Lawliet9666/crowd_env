@@ -19,9 +19,11 @@ class VecPPO(PPO):
         batch_lens = []
         batch_vals = []
         batch_dones = []
+        batch_obs_qp = [] if self.use_dual_actor_input else None
 
         # Buffers for each environment
         env_obs = [[] for _ in range(self.num_envs)]
+        env_obs_qp = [[] for _ in range(self.num_envs)] if self.use_dual_actor_input else None
         env_acts = [[] for _ in range(self.num_envs)]
         env_log_probs = [[] for _ in range(self.num_envs)]
         env_rews = [[] for _ in range(self.num_envs)]
@@ -32,26 +34,26 @@ class VecPPO(PPO):
         n_collision = 0
 
         # Reset all environments
-        obs, _ = self.env.reset()
-        obs = self._preprocess_obs(obs)
+        obs_raw, _ = self.env.reset()
         
         t_so_far = 0
         
         # We continue until we have collected enough timesteps in COMPLETED episodes
         while t_so_far < self.timesteps_per_batch:
+            obs_actor, obs_qp = self._preprocess_obs_pair(obs_raw)
             # Get actions for all envs
-            # obs is (num_envs, obs_dim) which works with FeedForwardNN
-            actions, log_probs = self.get_action(obs)
+            actions, log_probs = self.get_action(obs_actor, obs_qp=obs_qp, preprocessed=True)
             
             # Step the vectorized environment
-            next_obs, rews, terminations, truncations, infos = self.env.step(actions)
-            next_obs = self._preprocess_obs(next_obs)
+            next_obs_raw, rews, terminations, truncations, infos = self.env.step(actions)
             
             dones = terminations | truncations
 
             for i in range(self.num_envs):
                 # Store step data
-                env_obs[i].append(obs[i])
+                env_obs[i].append(obs_actor[i])
+                if env_obs_qp is not None:
+                    env_obs_qp[i].append(obs_qp[i])
                 env_acts[i].append(actions[i])
                 env_log_probs[i].append(log_probs[i])
                 env_rews[i].append(rews[i])
@@ -74,6 +76,8 @@ class VecPPO(PPO):
                     
                     # Store episode data to batch
                     batch_obs.extend(env_obs[i])
+                    if batch_obs_qp is not None:
+                        batch_obs_qp.extend(env_obs_qp[i])
                     batch_acts.extend(env_acts[i])
                     batch_log_probs.extend(env_log_probs[i])
                     batch_rews.append(ep_rews)
@@ -82,7 +86,7 @@ class VecPPO(PPO):
                     # Compute value estimates for this episode
                     with torch.no_grad():
                         ep_obs_tensor = torch.tensor(np.array(env_obs[i]), dtype=torch.float).to(self.device)
-                        ep_vals = self.critic(ep_obs_tensor).squeeze().detach().cpu().numpy().tolist()
+                        ep_vals = self.critic(self._to_critic_obs(ep_obs_tensor)).squeeze().detach().cpu().numpy().tolist()
                     if not isinstance(ep_vals, list):
                         ep_vals = [ep_vals]
                     batch_vals.append(ep_vals)
@@ -97,16 +101,22 @@ class VecPPO(PPO):
                     
                     # Reset buffers for env i
                     env_obs[i] = []
+                    if env_obs_qp is not None:
+                        env_obs_qp[i] = []
                     env_acts[i] = []
                     env_log_probs[i] = []
                     env_rews[i] = []
                     env_dones[i] = []
             
             # Update obs
-            obs = next_obs
+            obs_raw = next_obs_raw
 
         # Convert to tensors
         batch_obs = torch.tensor(np.array(batch_obs), dtype=torch.float).to(self.device)
+        if batch_obs_qp is not None:
+            self._last_batch_obs_qp = torch.tensor(np.array(batch_obs_qp), dtype=torch.float).to(self.device)
+        else:
+            self._last_batch_obs_qp = None
         batch_acts = torch.tensor(np.array(batch_acts), dtype=torch.float).to(self.device)
         batch_log_probs = torch.tensor(np.array(batch_log_probs), dtype=torch.float).to(self.device)
         
