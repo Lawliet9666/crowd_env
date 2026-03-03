@@ -15,7 +15,8 @@ WANDB_API_KEY=xxx  python scripts/run_crowdsim_ppo_base.py run_name=xxx wandb_en
 ```
 
 ### Best practice for PPO
-Use large batch_size (i.e rollout 8196) and large minibatch_size (e.g., 256)
+Use large batch_size (i.e rollout 8196) and large minibatch_size (e.g., 256 or larger)
+A good config example is `runs/multi-crowdsim-20m-ppo_base-bs8192-256-ep4-lr2.5e-04-cons-vf0.5-env_clip-ent0.02decay/config.yaml`
 
 | Total Steps | Batch size| minibatch size| best success| 
 |:-:|:-:|:-:|:-:|
@@ -27,26 +28,29 @@ Use large batch_size (i.e rollout 8196) and large minibatch_size (e.g., 256)
 | 50M | 4096 | 64 | 69.4%  |
 | 50M | 8192 | 256 | 74.2% |
 
-10M-20M should be enough for your experiment. PPO 10M takes 2 hours.
+10M-20M should be enough for your experiment. PPO 20M takes 4.3 hours (when num_env=8). You can increase num_envs=16/32 if needed.
+
 
 
 ### Best practice for SAC
 
 Set small alpha (e.g., 0.001 or auto), batch size 128-256, do not use larger batch size.
+A good config example is `runs/SACabl-crowdsim-silu-env8-sac_base-bs128-a0.001-alr1.0e-03-clr1.0e-03-model_tanh/config.yaml`
 
-| Total Steps | Batch size | alpha | best success| 
-|:-:|:-:|:-:|:-:|
-| 1M | 256 | 0.001 | 57 % | 
-| 1M | 256 | auto | 61 % | 
-| 2M | 256 | 0.001 | 78.6% | 
-| 2M | 256 | auto | 77% | 
-| 3M | 256 | 0.001 | 81% | 
-| 3M | 256 | auto | 78% |
-| 10M | 256 |  0.001 | -- | 
-| 10M | 256 | auto | -- |
+| Total Steps | Batch size | alpha | activation |best success| 
+|:-:|:-:|:-:|:-:|:-:|
+| 1M | 256 | auto |relu| 61 % | 
+| 1M | 256 | 0.001 |relu| 57 % |
+| 2M | 256 | auto |relu| 77% | 
+| 2M | 256 | 0.001 |relu| 78.6% | 
+| 2M | 256 | 0.001 |silu|  84% | 
+| 2M | 128 | 0.001 |silu|  85% |
+| 3M | 256 | auto |relu| 78% |
+| 3M | 256 | 0.001 |relu| 81% | 
 
 
-1M-2M should be enough for your experiment. SAC 1M takes 2 hours.
+
+1M-2M should be enough for your experiment. SAC 2M takes 3 hours (when num_env=8), larger num_env>8 is not verified.
 
 ## test
 ```
