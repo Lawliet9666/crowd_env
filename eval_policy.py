@@ -9,7 +9,7 @@ import imageio
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from crowd_sim.utils import absolute_obs_to_polar, absolute_obs_to_relative
+from crowd_sim.utils import absolute_obs_to_relative
 
 
 class RLEvalActorAdapter:
@@ -37,26 +37,15 @@ class RLEvalActorAdapter:
     def __getattr__(self, name):
         return getattr(self.actor, name)
 
-def _preprocess_obs(obs, obs_preprocess="relative", obs_topk=5, obs_farest_dist=5.0):
-    mode = str(obs_preprocess).lower()
-    if mode == "relative":
-        return absolute_obs_to_relative(obs, topk=obs_topk)
-    if mode == "polar":
-        return absolute_obs_to_polar(obs, topk=obs_topk, farest_dist=obs_farest_dist)
-    if mode in ("none", "raw"):
-        return np.asarray(obs, dtype=np.float32).reshape(-1)
-    raise ValueError(
-        f"Unknown obs_preprocess '{obs_preprocess}'. Expected one of: relative, polar, none."
-    )
+
+def resolve_episode_seed(base_seed, episode_index):
+    if base_seed is None:
+        return None
+    return int(base_seed) + int(episode_index)
 
 
-def _compute_action(actor, obs, obs_preprocess="relative", obs_topk=5, obs_farest_dist=5.0):
-    obs = _preprocess_obs(
-        obs,
-        obs_preprocess=obs_preprocess,
-        obs_topk=obs_topk,
-        obs_farest_dist=obs_farest_dist,
-    )
+def _compute_action(actor, obs):
+    obs = absolute_obs_to_relative(obs)
     if hasattr(actor, "deterministic"):
         actor.deterministic = True
     out = actor.get_action(obs)
@@ -65,6 +54,33 @@ def _compute_action(actor, obs, obs_preprocess="relative", obs_topk=5, obs_fares
     if isinstance(action, torch.Tensor):
         action = action.detach().cpu().numpy()
     return np.asarray(action, dtype=np.float32).reshape(-1)
+
+
+def _reset_actor_episode_cache(actor):
+    targets = [actor]
+    seen = set()
+    while len(targets) > 0:
+        obj = targets.pop()
+        if obj is None:
+            continue
+        oid = id(obj)
+        if oid in seen:
+            continue
+        seen.add(oid)
+
+        if hasattr(obj, "_qp_warm_start"):
+            obj._qp_warm_start = None
+        if hasattr(obj, "_u_prev"):
+            obj._u_prev = None
+        if hasattr(obj, "infeasible"):
+            obj.infeasible = False
+
+        nested_actor = getattr(obj, "actor", None)
+        if nested_actor is not None and nested_actor is not obj:
+            targets.append(nested_actor)
+        nested_module = getattr(obj, "module", None)
+        if nested_module is not None and nested_module is not obj:
+            targets.append(nested_module)
 
 
 def _log_summary(ep_len, ep_ret, ep_num, ep_collision, ep_success):
@@ -271,56 +287,66 @@ def _record_executed_action(metrics, env, fallback_action):
     metrics["action_exec"].append(np.array(executed, dtype=float))
 
 
-def rollout(
+def run_one_episode(
     actor,
     env,
-    base_seed=0,
+    seed=None,
+    reset_options=None,
     track_signals=False,
     unom_holder=None,
-    obs_preprocess="relative",
-    obs_topk=5,
-    obs_farest_dist=5.0,
+    collect_frames=False,
 ):
-    ep_cnt = 0
-    while True:
-        obs, _ = env.reset(seed=base_seed + ep_cnt)
-        ep_cnt += 1
+    """Run a single episode and return step-level and episode-level results."""
+    if seed is None and reset_options is None:
+        obs, _ = env.reset()
+    else:
+        obs, _ = env.reset(seed=seed, options=reset_options)
+    _reset_actor_episode_cache(actor)
 
-        done = False
-        ep_len = 0
-        ep_ret = 0
-        ep_collision = False
-        ep_success = False
+    done = False
+    ep_len = 0
+    ep_ret = 0.0
+    ep_collision = False
+    ep_success = False
+    ep_timeout = False
+    ep_infeasible = False
 
-        frames = []
-        metrics = _init_metrics(track_signals)
+    frames = [] if collect_frames else []
+    metrics = _init_metrics(track_signals)
 
-        while not done:
-            ep_len += 1
+    while not done:
+        ep_len += 1
 
+        if collect_frames:
             _render_step(env, frames)
 
-            action = _compute_action(
-                actor,
-                obs,
-                obs_preprocess=obs_preprocess,
-                obs_topk=obs_topk,
-                obs_farest_dist=obs_farest_dist,
-            )
-            _record_actor_metrics(metrics, actor, action, unom_holder)
-
-            obs, rew, terminated, truncated, info = env.step(action)
-            done = terminated | truncated
+        action = _compute_action(actor, obs)
+        _record_actor_metrics(metrics, actor, action, unom_holder)
+        if bool(getattr(actor, "infeasible", False)):
+            ep_infeasible = True
             _record_executed_action(metrics, env, action)
+            # done = True
+            # break
 
-            if info.get("is_collision", False):
-                ep_collision = True
-            if info.get("is_success", False):
-                ep_success = True
+        obs, rew, terminated, truncated, info = env.step(action)
+        done = bool(terminated or truncated)
+        _record_executed_action(metrics, env, action)
 
-            ep_ret += rew
+        ep_collision = ep_collision or bool(info.get("is_collision", False))
+        ep_success = ep_success or bool(info.get("is_success", False))
+        ep_timeout = ep_timeout or bool(info.get("is_timeout", False))
+        ep_ret += float(rew)
 
-        yield ep_len, ep_ret, ep_collision, ep_success, frames, metrics
+    return {
+        "ep_len": ep_len,
+        "ep_ret": ep_ret,
+        "ep_collision": ep_collision,
+        "ep_success": ep_success,
+        "ep_timeout": ep_timeout,
+        "ep_infeasible": ep_infeasible,
+        "frames": frames,
+        "metrics": metrics,
+    }
 
 
 def eval_policy(
@@ -330,14 +356,12 @@ def eval_policy(
     save_path=None,
     base_seed=None,
     method=None,
-    obs_preprocess="relative",
-    obs_topk=5,
-    obs_farest_dist=5.0,
     visualize_episodes=20,
 ):
     total_episodes = 0
     success_count = 0
     collision_count = 0
+    infeasible_count = 0
 
     actor = policy
    
@@ -349,18 +373,25 @@ def eval_policy(
         hook_handle, unom_holder = _setup_unom_hook(actor)
 
     try:
-        for ep_num, (ep_len, ep_ret, ep_collision, ep_success, frames, metrics) in enumerate(
-            rollout(
+        for ep_num in range(max_episodes):
+            seed = resolve_episode_seed(base_seed, ep_num)
+            result = run_one_episode(
                 actor,
                 env,
-                base_seed=base_seed,
+                seed=seed,
+                reset_options=None,
                 track_signals=track_signals,
                 unom_holder=unom_holder,
-                obs_preprocess=obs_preprocess,
-                obs_topk=obs_topk,
-                obs_farest_dist=obs_farest_dist,
+                collect_frames=True,
             )
-        ):
+            ep_len = result["ep_len"]
+            ep_ret = result["ep_ret"]
+            ep_collision = result["ep_collision"]
+            ep_success = result["ep_success"]
+            ep_infeasible = result["ep_infeasible"]
+            frames = result["frames"]
+            metrics = result["metrics"]
+
             _log_summary(ep_len, ep_ret, ep_num, ep_collision, ep_success)
 
             success_flag = ep_success and (not ep_collision)
@@ -387,9 +418,8 @@ def eval_policy(
                 success_count += 1
             if ep_collision:
                 collision_count += 1
-
-            if total_episodes >= max_episodes:
-                break
+            if ep_infeasible:
+                infeasible_count += 1
     finally:
         if hook_handle is not None:
             hook_handle.remove()
@@ -399,11 +429,14 @@ def eval_policy(
     if total_episodes > 0:
         success_rate = success_count / total_episodes
         collision_rate = collision_count / total_episodes
+        infeasible_rate = infeasible_count / total_episodes
         print(f"Success Rate: {success_rate * 100:.2f}%")
         print(f"Collision Rate: {collision_rate * 100:.2f}%")
+        print(f"Infeasible Rate: {infeasible_rate * 100:.2f}%")
     else:
         success_rate = None
         collision_rate = None
+        infeasible_rate = None
         print("Success Rate: N/A")
     print("------------------------------------------------------------")
 
@@ -415,6 +448,8 @@ def eval_policy(
             "collision_count": collision_count,
             "success_rate": success_rate,
             "collision_rate": collision_rate,
+            "infeasible_count": infeasible_count,
+            "infeasible_rate": infeasible_rate,
         }
 
         log_payload = {
@@ -424,9 +459,6 @@ def eval_policy(
                 "max_episodes": max_episodes,
                 "base_seed": base_seed,
                 "method": mode,
-                "obs_preprocess": str(obs_preprocess).lower(),
-                "obs_topk": int(obs_topk),
-                "obs_farest_dist": float(obs_farest_dist),
             },
             "results": summary,
         }
@@ -434,38 +466,20 @@ def eval_policy(
             json.dump(log_payload, f, indent=2)
 
 
-def run_crossing_scenario(
-    policy,
-    env,
-    save_path=None,
-    obs_preprocess="relative",
-    obs_topk=5,
-    obs_farest_dist=5.0,
-):
+def run_crossing_scenario(policy, env, save_path=None):
     actor = policy
-
-    obs, _ = env.reset(options={"scenario": "crossing"})
-    done = False
-    frames = []
-    is_collision = False
-    is_success = False
-
-    while not done:
-        _render_step(env, frames)
-        action = _compute_action(
-            actor,
-            obs,
-            obs_preprocess=obs_preprocess,
-            obs_topk=obs_topk,
-            obs_farest_dist=obs_farest_dist,
-        )
-
-        obs, _, terminated, truncated, info = env.step(action)
-        if info.get("is_collision", False):
-            is_collision = True
-        if info.get("is_success", False):
-            is_success = True
-        done = terminated | truncated
+    result = run_one_episode(
+        actor=actor,
+        env=env,
+        seed=None,
+        reset_options={"scenario": "crossing"},
+        track_signals=False,
+        unom_holder=None,
+        collect_frames=True,
+    )
+    frames = result["frames"]
+    is_collision = bool(result["ep_collision"])
+    is_success = bool(result["ep_success"])
 
     if save_path and len(frames) > 0:
         os.makedirs(save_path, exist_ok=True)

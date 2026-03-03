@@ -88,13 +88,13 @@ class GMMNoiseModel:
         self.rng = np.random.default_rng(seed)
 
 class SingleIntegrator(RobotModel):
-    def __init__(self, dt, radius=0.3, umax=1.0):
+    def __init__(self, dt, radius=0.3, umax=1.0, gmm_params=None):
         super().__init__(dt)
         self.radius = radius
         self.vmax = umax
         
         # GMM Noise Parameters
-        self.gmm = GMMNoiseModel()
+        self.gmm = GMMNoiseModel(**(gmm_params or {}))
         self.val_history = []
         self.u = None
 

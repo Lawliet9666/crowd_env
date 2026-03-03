@@ -61,9 +61,9 @@ class ORCA(Policy):
         self.radius = None
         self.max_speed = 1 # the ego agent assumes that all other agents have this max speed
         self.sim = None
-        self.neighbor_dist = float(cfg.get("neighbor_dist", 10.0))
-        self.time_horizon = float(cfg.get("time_horizon", 5.0))
-        self.time_horizon_obst = float(cfg.get("time_horizon_obst", 5.0))
+        self.neighbor_dist = float(cfg.get("neighbor_dist", 5.0))
+        self.time_horizon = float(cfg.get("time_horizon", 0.5))
+        self.time_horizon_obst = float(cfg.get("time_horizon_obst", 1.0))
         self.safety_space = float(cfg.get("safety_space", 0.1))
 
 

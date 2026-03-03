@@ -10,34 +10,19 @@ import math
 import os
 import re
 from typing import Any, Dict, List, Optional
-
-import gymnasium as gym
 import numpy as np
 import torch
 
 from config.config import Config
-from crowd_sim.env.social_nav import SocialNav
-from crowd_sim.env.social_nav_var_num import SocialNavVarNum
-from crowd_sim.utils import absolute_obs_to_relative, relative_obs_dim_from_env_dim
-from eval_policy import RLEvalActorAdapter
-from crowd_nav.policy_utils import get_policy_class
+from crowd_sim.utils import (
+    build_env,
+    relative_obs_dim_from_env_dim,
+    dump_test_config,
+)
+from eval_policy import RLEvalActorAdapter, run_one_episode, resolve_episode_seed
 
-
-def build_env(env_name: str, config: Config):
-    name = (env_name or "").strip()
-    if name in ("social_nav", "SocialNav"):
-        return SocialNav(render_mode=None, config_file=config)
-    if name in ("social_nav_var_num", "SocialNavVarNum"):
-        return SocialNavVarNum(render_mode=None, config_file=config)
-    return gym.make(name, render_mode=None, config_file=config)
-
-
-def _set_config_from_saved(config: Config, saved_cfg: Dict[str, Any]) -> None:
-    for section_name in ("env", "human", "robot", "controller", "reward"):
-        section_dict = saved_cfg.get(section_name, {})
-        section = getattr(config, section_name)
-        for key, value in section_dict.items():
-            section[key] = value
+FIXED_EVAL_SEEDS = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+EVAL_SUMMARY_FILENAME = "checkpoint_eval_all_multiseed.json"
 
 
 def _extract_step(path: str) -> int:
@@ -62,8 +47,6 @@ def discover_checkpoints(run_dir: str) -> List[Dict[str, Any]]:
         if any(tok in lower for tok in ("optim", "optimizer", "sched", "scaler")):
             continue
 
-        is_ema = "ema" in lower
-
         is_best = "best" in lower
         if "sac" in lower:
             algo = "sac"
@@ -72,117 +55,88 @@ def discover_checkpoints(run_dir: str) -> List[Dict[str, Any]]:
         else:
             algo = "actor"
 
-        kind = f"{algo}_{'ema' if is_ema else 'raw'}"
-        if is_best:
-            kind += "_best"
-
         entries.append(
             {
                 "path": path,
                 "step": _extract_step(path),
-                "kind": kind,
                 "algo": algo,
-                "is_ema": is_ema,
                 "is_best": is_best,
             }
         )
 
     def _sort_key(item):
         step = item["step"] if item["step"] >= 0 else 10**18
-        kind_rank = 0 if item["is_ema"] else 1
-        return (0 if item["is_best"] else 1, step, kind_rank, item["path"])
+        return (0 if item["is_best"] else 1, step, item["path"])
 
     entries.sort(key=_sort_key)
     return entries
 
 
-def _to_action(actor, obs):
-    obs_rel = absolute_obs_to_relative(obs)
-
-    if hasattr(actor, "deterministic"):
-        actor.deterministic = True
-
-    if hasattr(actor, "get_action"):
-        out = actor.get_action(obs_rel)
-    elif isinstance(actor, torch.nn.Module):
-        with torch.no_grad():
-            dev = next(actor.parameters()).device
-            obs_t = torch.as_tensor(obs_rel, dtype=torch.float32, device=dev).unsqueeze(0)
-            out = actor(obs_t)
-            if torch.is_tensor(out) and out.ndim >= 2:
-                out = out[0]
-    else:
-        out = actor(obs_rel)
-
-    action = out[0] if isinstance(out, (tuple, list)) else out
-    if torch.is_tensor(action):
-        action = action.detach().cpu().numpy()
-    return np.asarray(action, dtype=np.float32).reshape(-1)
-
-
 def evaluate_actor(actor, env, episodes: int, base_seed: Optional[int]) -> Dict[str, Any]:
     returns = []
     lens = []
-    success_count = 0
-    collision_count = 0
-    timeout_count = 0
+    success_hits = 0
+    collision_hits = 0
+    timeout_hits = 0
+    infeasible_hits = 0
 
     for ep in range(episodes):
-        if base_seed is None:
-            obs, _ = env.reset()
-        else:
-            obs, _ = env.reset(seed=base_seed + ep)
+        seed = resolve_episode_seed(base_seed, ep)
+        result = run_one_episode(
+            actor=actor,
+            env=env,
+            seed=seed,
+            track_signals=False,
+            unom_holder=None,
+            collect_frames=False,
+        )
 
-        done = False
-        ep_ret = 0.0
-        ep_len = 0
-        ep_success = False
-        ep_collision = False
-        ep_timeout = False
-
-        while not done:
-            action = _to_action(actor, obs)
-            obs, rew, terminated, truncated, info = env.step(action)
-            done = bool(terminated or truncated)
-            ep_ret += float(rew)
-            ep_len += 1
-            ep_success = ep_success or bool(info.get("is_success", False))
-            ep_collision = ep_collision or bool(info.get("is_collision", False))
-            ep_timeout = ep_timeout or bool(info.get("is_timeout", False))
-
-        returns.append(ep_ret)
-        lens.append(ep_len)
-        if ep_success and not ep_collision:
-            success_count += 1
-        if ep_collision:
-            collision_count += 1
-        if ep_timeout:
-            timeout_count += 1
+        returns.append(float(result["ep_ret"]))
+        lens.append(int(result["ep_len"]))
+        if bool(result["ep_success"]) and (not bool(result["ep_collision"])):
+            success_hits += 1
+        if bool(result["ep_collision"]):
+            collision_hits += 1
+        if bool(result["ep_timeout"]):
+            timeout_hits += 1
+        if bool(result.get("ep_infeasible", False)):
+            infeasible_hits += 1
 
     total = max(episodes, 1)
     return {
         "total_episodes": episodes,
-        "success_count": success_count,
-        "collision_count": collision_count,
-        "timeout_count": timeout_count,
-        "success_rate": success_count / total,
-        "collision_rate": collision_count / total,
-        "timeout_rate": timeout_count / total,
+        "success_rate": success_hits / total,
+        "collision_rate": collision_hits / total,
+        "timeout_rate": timeout_hits / total,
+        "infeasible_rate": infeasible_hits / total,
         "avg_return": float(np.mean(returns)) if returns else 0.0,
         "avg_ep_len": float(np.mean(lens)) if lens else 0.0,
     }
 
 
-def _parse_seed_list(seed_text: str) -> List[int]:
-    parts = [p.strip() for p in seed_text.split(",") if p.strip()]
-    if not parts:
-        raise ValueError(
-            "Empty --eval_seeds. Example: --eval_seeds 100,200,300,400,500,600,700,800,900,1000"
+def _evaluate_over_seeds(actor, env, eval_seeds, episodes_per_seed: int):
+    per_seed = []
+    per_seed_full = []
+    for s_idx, seed in enumerate(eval_seeds):
+        metrics = evaluate_actor(actor, env, episodes=episodes_per_seed, base_seed=seed)
+        row_seed = {
+            "success_rate": metrics["success_rate"],
+            "collision_rate": metrics["collision_rate"],
+            "timeout_rate": metrics["timeout_rate"],
+            "infeasible_rate": metrics["infeasible_rate"],
+            "avg_return": metrics["avg_return"],
+            "avg_ep_len": metrics["avg_ep_len"],
+        }
+        per_seed.append(row_seed)
+        per_seed_full.append(metrics)
+        print(
+            f"  [{s_idx + 1}/{len(eval_seeds)}] seed={seed} "
+            f"succ={metrics['success_rate']:.3f} coll={metrics['collision_rate']:.3f} infeas={metrics['infeasible_rate']:.3f} "
+            f"ret={metrics['avg_return']:.3f} len={metrics['avg_ep_len']:.2f}"
         )
-    seeds = [int(p) for p in parts]
-    if len(set(seeds)) != len(seeds):
-        raise ValueError("--eval_seeds contains duplicate values.")
-    return seeds
+
+    agg = _aggregate_per_seed(per_seed_full)
+    return per_seed, agg
 
 
 def _policy_kwargs_from_config(cfg: Config) -> Dict[str, Any]:
@@ -218,27 +172,58 @@ def _needs_rl_adapter(method: str) -> bool:
     return (method or "").lower().startswith("rl")
 
 
+def _print_eval_context(
+    cfg: Config,
+    method: str,
+    env_name: str,
+    is_rl_method: bool,
+    num_checkpoints: int,
+    num_seeds: int,
+    episodes_per_seed: int,
+):
+    robot_type = getattr(cfg.robot, "type", "unknown")
+    num_humans = getattr(cfg.human, "num_humans", "unknown")
+    max_obs = getattr(cfg.env, "max_obstacles_obs", "unknown")
+    mode = "rl" if is_rl_method else "controller"
+    target = f"{num_checkpoints} checkpoints" if is_rl_method else "controller"
+    print(
+        f"[EvalConfig] mode={mode}, target={target}, method={method}, env={env_name}, "
+        f"robot_type={robot_type}, obstacles={num_humans}, max_obstacles_obs={max_obs}, "
+        f"seeds={num_seeds}, episodes/seed={episodes_per_seed}",
+        flush=True,
+    )
+
+
 def _aggregate_per_seed(per_seed: List[Dict[str, Any]]) -> Dict[str, Any]:
     total_episodes = int(sum(r["total_episodes"] for r in per_seed))
-    success_count = int(sum(r["success_count"] for r in per_seed))
-    collision_count = int(sum(r["collision_count"] for r in per_seed))
-    timeout_count = int(sum(r["timeout_count"] for r in per_seed))
 
     denom = max(total_episodes, 1)
+    success_rate = (
+        sum(float(r["success_rate"]) * int(r["total_episodes"]) for r in per_seed) / denom
+    )
+    collision_rate = (
+        sum(float(r["collision_rate"]) * int(r["total_episodes"]) for r in per_seed) / denom
+    )
+    timeout_rate = (
+        sum(float(r["timeout_rate"]) * int(r["total_episodes"]) for r in per_seed) / denom
+    )
+    infeasible_rate = (
+        sum(float(r["infeasible_rate"]) * int(r["total_episodes"]) for r in per_seed) / denom
+    )
+
     totals = {
         "total_episodes": total_episodes,
-        "success_count": success_count,
-        "collision_count": collision_count,
-        "timeout_count": timeout_count,
-        "success_rate": success_count / denom,
-        "collision_rate": collision_count / denom,
-        "timeout_rate": timeout_count / denom,
+        "success_rate": float(success_rate),
+        "collision_rate": float(collision_rate),
+        "timeout_rate": float(timeout_rate),
+        "infeasible_rate": float(infeasible_rate),
     }
 
     aggregate = {
         "success_rate": _summarize_metric([r["success_rate"] for r in per_seed]),
         "collision_rate": _summarize_metric([r["collision_rate"] for r in per_seed]),
         "timeout_rate": _summarize_metric([r["timeout_rate"] for r in per_seed]),
+        "infeasible_rate": _summarize_metric([r["infeasible_rate"] for r in per_seed]),
         "avg_return": _summarize_metric([r["avg_return"] for r in per_seed]),
         "avg_ep_len": _summarize_metric([r["avg_ep_len"] for r in per_seed]),
     }
@@ -262,125 +247,152 @@ def _choose_best(results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return max(valid, key=_key)
 
 
-def _load_run_config(run_dir: str) -> Dict[str, Any]:
-    run_cfg_path = os.path.join(run_dir, "train_config.json")
-    if not os.path.isfile(run_cfg_path):
-        raise FileNotFoundError(f"train_config.json not found: {run_cfg_path}")
-
-    with open(run_cfg_path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--actor_model",
         required=True,
         type=str,
-        help="Run folder name under trained_models/default (e.g. 20260221_234406_unicycle_rl)",
-    )
-    parser.add_argument(
-        "--eval_seeds",
-        type=str,
-        default="100,200,300,400,500,600,700,800,900,1000",
-        help="Comma-separated base seeds. Default uses 10 distinct seeds.",
+        help="Run folder name under trained_models (e.g. 20260221_234406_unicycle_rl)",
     )
     parser.add_argument(
         "--episodes_per_seed",
         type=int,
         default=50,
-        help="Episodes evaluated for each seed on each checkpoint.",
+        help="Episodes evaluated for each fixed seed (50..1000).",
     )
     parser.add_argument(
-        "--out_name",
+        "--method",
         type=str,
-        default="checkpoint_eval_all_multiseed.json",
-        help="Output JSON filename in run directory.",
+        default="rl",
+        help="Policy/controller method (e.g. rl, cbfqp, nominal).",
     )
     parser.add_argument("--device", type=str, default="cuda", choices=["cpu", "cuda"])
+    parser.add_argument(
+        "--robot_type",
+        type=str,
+        default=None,
+        help="Optional robot type override: single_integrator / unicycle.",
+    )
+    parser.add_argument(
+        "--num_humans",
+        type=int,
+        default=None,
+        help="Optional override for config.human.num_humans.",
+    )
     args = parser.parse_args()
 
-    run_dir = os.path.abspath(os.path.join("trained_models", "default", args.actor_model))
-    if not os.path.isdir(run_dir):
+    run_dir = os.path.abspath(os.path.join("trained_models", args.actor_model))
+    if _needs_rl_adapter(args.method) and not os.path.isdir(run_dir):
         raise FileNotFoundError(f"Run directory not found: {run_dir}")
+    os.makedirs(run_dir, exist_ok=True)
 
     if args.episodes_per_seed <= 0:
         raise ValueError("--episodes_per_seed must be > 0")
 
-    eval_seeds = _parse_seed_list(args.eval_seeds)
-    run_cfg = _load_run_config(run_dir)
-
-    method = run_cfg.get("args", {}).get("method", "rl")
-    env_name = run_cfg.get("args", {}).get("env_name", "social_nav_var_num")
+    eval_seeds = FIXED_EVAL_SEEDS
 
     device = torch.device("cuda" if (args.device == "cuda" and torch.cuda.is_available()) else "cpu")
 
     cfg = Config()
-    _set_config_from_saved(cfg, run_cfg.get("config", {}))
-    env = build_env(env_name, cfg)
+    if args.robot_type is not None:
+        cfg.robot.type = args.robot_type
+    if cfg.robot.type == "unicycle":
+        cfg.robot.ini_goal_dist = 6.0
+    elif cfg.robot.type == "single_integrator":
+        cfg.robot.ini_goal_dist = 8.0
+    if args.num_humans is not None:
+        if args.num_humans <= 0:
+            raise ValueError("--num_humans must be > 0")
+        human_count = int(args.num_humans)
+        cfg.human.num_humans = human_count
 
-    PolicyClass = get_policy_class(method)
-    obs_dim = relative_obs_dim_from_env_dim(env.observation_space.shape[0])
-    act_dim = env.action_space.shape[0]
-    policy_kwargs = _policy_kwargs_from_config(cfg)
+    method = args.method
+    cfg.env.rl_xy_to_unicycle = bool(method == "rl" and cfg.robot.type == "unicycle")
+    env_name = cfg.env.get("name", "social_nav_var_num")
 
-    checkpoints = discover_checkpoints(run_dir)
-    if not checkpoints:
-        raise RuntimeError(f"No actor checkpoints found in {run_dir}")
+    is_rl_method = _needs_rl_adapter(method)
+    checkpoints: List[Dict[str, Any]]
+    if is_rl_method:
+        checkpoints = discover_checkpoints(run_dir)
+        if not checkpoints:
+            raise RuntimeError(f"No actor checkpoints found in {run_dir}")
+    else:
+        checkpoints = [
+            {
+                "path": None,
+                "step": -1,
+                "algo": "controller",
+                "is_best": True,
+            }
+        ]
+    _print_eval_context(
+        cfg=cfg,
+        method=method,
+        env_name=env_name,
+        is_rl_method=is_rl_method,
+        num_checkpoints=len(checkpoints),
+        num_seeds=len(eval_seeds),
+        episodes_per_seed=int(args.episodes_per_seed),
+    )
+    env = build_env(env_name, render_mode=None, config=cfg)
 
-    print(
-        f"Evaluating {len(checkpoints)} checkpoints, method={method}, env={env_name}, "
-        f"seeds={len(eval_seeds)}, episodes/seed={args.episodes_per_seed}"
+    dump_test_config(
+        run_dir,
+        cfg,
+        hyperparameters={
+            "env_name": env_name,
+            "method": method,
+            "eval_seeds": eval_seeds,
+            "episodes_per_seed": int(args.episodes_per_seed),
+            "device": str(device),
+        },
+        extra={
+            "script": "eval.py",
+            "config_source": "config.py",
+        },
     )
 
     results: List[Dict[str, Any]] = []
 
     try:
-        for ckpt_idx, ckpt in enumerate(checkpoints):
-            ckpt_path = ckpt["path"]
-            step = ckpt["step"]
-            print(
-                f"\n[{ckpt_idx + 1}/{len(checkpoints)}] step={step} "
-                f"file={os.path.basename(ckpt_path)}"
-            )
+        if is_rl_method:
+            from crowd_nav.rl_policy_factory import get_rl_policy_class
 
-            row: Dict[str, Any] = {
-                "checkpoint_path": ckpt_path,
-                "checkpoint_file": os.path.basename(ckpt_path),
-                "step": step,
-            }
+            PolicyClass = get_rl_policy_class(method)
+            obs_dim = relative_obs_dim_from_env_dim(env.observation_space.shape[0])
+            act_dim = env.action_space.shape[0]
+            policy_kwargs = _policy_kwargs_from_config(cfg)
 
-            try:
+            for ckpt_idx, ckpt in enumerate(checkpoints):
+                ckpt_path = ckpt["path"]
+                step = ckpt["step"]
+                print(
+                    f"\n[{ckpt_idx + 1}/{len(checkpoints)}] step={step} "
+                    f"file={os.path.basename(ckpt_path)}"
+                )
+
+                row: Dict[str, Any] = {
+                    "checkpoint_path": ckpt_path,
+                    "checkpoint_file": os.path.basename(ckpt_path),
+                    "step": step,
+                }
+
                 policy = PolicyClass(obs_dim, act_dim, **policy_kwargs).to(device)
                 state = torch.load(ckpt_path, map_location=device)
                 policy.load_state_dict(state)
                 policy.eval()
+                actor = RLEvalActorAdapter(policy, env.action_space, device)
 
-                actor = RLEvalActorAdapter(policy, env.action_space, device) if _needs_rl_adapter(method) else policy
-
-                per_seed = []
-                per_seed_full = []
-                for s_idx, seed in enumerate(eval_seeds):
-                    metrics = evaluate_actor(actor, env, episodes=args.episodes_per_seed, base_seed=seed)
-                    row_seed = {
-                        "success_rate": metrics["success_rate"],
-                        "collision_rate": metrics["collision_rate"],
-                        "timeout_rate": metrics["timeout_rate"],
-                        "avg_return": metrics["avg_return"],
-                        "avg_ep_len": metrics["avg_ep_len"],
-                    }
-                    per_seed.append(row_seed)
-                    per_seed_full.append(metrics)
-                    print(
-                        f"  [{s_idx + 1}/{len(eval_seeds)}] seed={seed} "
-                        f"succ={metrics['success_rate']:.3f} coll={metrics['collision_rate']:.3f} "
-                        f"ret={metrics['avg_return']:.3f} len={metrics['avg_ep_len']:.2f}"
-                    )
-
-                agg = _aggregate_per_seed(per_seed_full)
-                row["per_seed"] = per_seed
+                per_seed, agg = _evaluate_over_seeds(
+                    actor=actor,
+                    env=env,
+                    eval_seeds=eval_seeds,
+                    episodes_per_seed=args.episodes_per_seed,
+                )
                 row["totals"] = agg["totals"]
                 row["aggregate"] = agg["aggregate"]
+                row["per_seed"] = per_seed
 
                 print(
                     "  aggregate: "
@@ -388,9 +400,33 @@ def main():
                     f"coll={row['aggregate']['collision_rate']['mean']:.3f} "
                     f"ret={row['aggregate']['avg_return']['mean']:.3f}"
                 )
-            except Exception as exc:
-                row["error"] = str(exc)
-                print(f"  failed: {exc}")
+
+
+                results.append(row)
+        else:
+            row = {
+                "checkpoint_path": None,
+                "checkpoint_file": f"controller:{method}",
+                "step": -1,
+            }
+            from controller.robot_controller_factory import build_robot_controller
+
+            actor = build_robot_controller(method, cfg, env)
+            per_seed, agg = _evaluate_over_seeds(
+                actor=actor,
+                env=env,
+                eval_seeds=eval_seeds,
+                episodes_per_seed=args.episodes_per_seed,
+            )
+            row["totals"] = agg["totals"]
+            row["aggregate"] = agg["aggregate"]
+            row["per_seed"] = per_seed
+            print(
+                "  aggregate: "
+                f"succ={row['aggregate']['success_rate']['mean']:.3f} "
+                f"coll={row['aggregate']['collision_rate']['mean']:.3f} "
+                f"ret={row['aggregate']['avg_return']['mean']:.3f}"
+            )
 
             results.append(row)
     finally:
@@ -402,6 +438,7 @@ def main():
         "run_dir": run_dir,
         "method": method,
         "env_name": env_name,
+        "config_source": "config.py",
         "device": str(device),
         "eval_seeds": eval_seeds,
         "episodes_per_seed": int(args.episodes_per_seed),
@@ -410,7 +447,7 @@ def main():
         "checkpoints": results,
     }
 
-    out_path = os.path.join(run_dir, args.out_name)
+    out_path = os.path.join(run_dir, EVAL_SUMMARY_FILENAME)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 

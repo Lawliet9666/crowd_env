@@ -25,8 +25,8 @@ class Config:
         self.env.name = "social_nav_var_num" # social_nav_var_num social_nav
         self.env.dt = 0.1
         self.env.max_steps = 400
-        self.env.sensing_radius = 5.0
-        self.env.max_obstacles_obs = 20
+        self.env.sensing_radius = 20.0
+        self.env.max_obstacles_obs = 1
         self.env.normalize_obs = False
         # For pure RL + unicycle only:
         # when enabled, policy outputs [vx, vy], env.step converts to [v, omega].
@@ -38,7 +38,7 @@ class Config:
         # Human Parameters
         self.human = BaseConfig()
         # self.human.radius = (0.3, 0.5)  # can be a single value or a range (min, max)
-        self.human.radius = 0.3  # can be a single value or a range (min, max)
+        self.human.radius = 0.4  # can be a single value or a range (min, max)
         # self.human.radius = 0.3
         self.human.vmax = (0.5, 1.5)
         self.human.arena_size = 6.0
@@ -50,16 +50,27 @@ class Config:
         self.human.randomize_attributes = True
         # Whether to apply GMM perturbation to human actions in env.step.
         self.human.use_gmm = True
+        # GMM noise model parameters for human velocity perturbation and predictors.
+        self.human.gmm = {
+            # Forward has highest probability, left/right are smaller.
+            "weights": [0.6, 0.2, 0.2],
+            # Per-component std (spherical): [forward, left, right].
+            "stds": [0.1, 0.2, 0.2],
+            # Optional base means; usually zeros because directional means are
+            # built from nominal velocity and lateral_ratio inside GMMNoiseModel.
+            "means": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            "lateral_ratio": 0.3,
+        }
         # Human goal changing behavior
         self.human.random_goal_changing = False
         self.human.goal_change_chance = 0.5
         self.human.end_goal_changing = True
         self.human.end_goal_change_chance = 1.0
         self.human.orca = {
-            "neighbor_dist": 10.0,
-            "time_horizon": 5.0,
-            "time_horizon_obst": 5.0,
-            "safety_space": 0.15,
+            "neighbor_dist": 5.0,
+            "time_horizon": 0.5,
+            "time_horizon_obst": 1.0,
+            "safety_space": 0.05,
             "avoid_robot": False,
         }
         self.human.sf = {
@@ -81,19 +92,19 @@ class Config:
         # Robot Parameters
         self.robot = BaseConfig()
         self.robot.radius = 0.3
-        self.robot.vmax = 1.0
+        self.robot.vmax = 1.5
         self.robot.amax = 2.0
         self.robot.omega_max = np.pi / 2
         # Minimum initial robot-goal distance in SocialNavVarNum.
-        self.robot.ini_goal_dist = 4.0 # influences initial sampling of robot and goal positions to ensure they are not too close
-        
+        self.robot.ini_goal_dist = 6.0 # influences initial sampling of robot and goal positions to ensure they are not too close
+
         self.robot.type = "unicycle"  # 'single_integrator', 'unicycle', 'unicycle_dynamic'
 
         # Optimization controller parameters
         self.controller = BaseConfig()
         self.controller.cbf_alpha = 2.0  # for CBF and CVaR-CBF Controller
         self.controller.cvar_beta = 0.5  # for CVaR-BFQP Controller
-        self.controller.safety_margin = 0.10  # similar to discomfort distance but used in controller
+        self.controller.safety_margin = 0.05  # similar to discomfort distance but used in controller
 
         # Reward Parameters
         self.reward = BaseConfig()

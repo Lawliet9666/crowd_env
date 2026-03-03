@@ -93,7 +93,8 @@ class BarrierNet(nn.Module):
         elif self.robot_type == 'unicycle':
             x = self.dCBF_Unicycle(obs, unom, alpha)
         elif self.robot_type == 'unicycle_dynamic':
-            x = self.dCBF_UnicycleDynamic(obs, unom, alpha)
+            # unicycle_dynamic path intentionally disabled.
+            x = torch.zeros_like(unom)
         else:
             raise NotImplementedError(f"Robot type {self.robot_type} not supported in BarrierNet")
                
@@ -383,89 +384,8 @@ class BarrierNet(nn.Module):
         return x.to(dtype=obs.dtype)
 
     def dCBF_UnicycleDynamic(self, obs, u_nom, alpha):
-        # High Order CBF for Unicycle Dynamic with learnable alpha
-        nBatch = obs.size(0)
-        device = self.fc1.weight.device
-        
-        Q = Variable(torch.eye(self.nCls)).to(device)
-        Q = Q.unsqueeze(0).expand(nBatch, self.nCls, self.nCls)
-        p = -2 * u_nom
-        Q = 2 * Q
-        
-        vx = obs[:, 2]
-        vy = obs[:, 3]
-        theta = obs[:, 4]
-        rel, vel, mask = self._extract_obstacle_blocks(obs)  # (B,K,2), (B,K,2), (B,K)
-        rel_x = rel[:, :, 0]
-        rel_y = rel[:, :, 1]
-        v_hx = vel[:, :, 0]
-        v_hy = vel[:, :, 1]
-
-        # current_vel = obs[:, 8:10].cpu().numpy()  # (B,2)
-        # human_vel_pred = self.predictor.predict_vel_expectation(current_vel)
-        # v_hx = human_vel_pred[:, 0]
-        # v_hy = human_vel_pred[:, 1]
-        
-        R_safe = self.safe_dist
-        
-        # HOCBF terms
-        dist_sq = rel_x**2 + rel_y**2
-        h = dist_sq - R_safe**2
-        
-        v_rel_x = vx - v_hx
-        v_rel_y = vy - v_hy
-        v_rel_sq = v_rel_x**2 + v_rel_y**2
-        
-        h_dot = 2 * (rel_x * v_rel_x + rel_y * v_rel_y)
-        
-        c = torch.cos(theta)
-        s = torch.sin(theta)
-        v_signed = vx * c + vy * s
-        
-        # J_dyn0 = [-v*s, v*c]
-        j0_x = -v_signed * s
-        j0_y = v_signed * c
-        
-        # J_dyn1 = [c, s]
-        j1_x = c
-        j1_y = s
-        
-        # Lg Lf h
-        lg0 = 2 * (rel_x * j0_x.unsqueeze(1) + rel_y * j0_y.unsqueeze(1))
-        lg1 = 2 * (rel_x * j1_x.unsqueeze(1) + rel_y * j1_y.unsqueeze(1))
-        
-        # Constraint: Lg*u >= - (2*||v_rel||^2 + K*h_dot + gamma^2*h)
-        # We assume gamma1 = gamma2 = alpha (learnable)
-        # K_gain = 2 * alpha
-        # gamma^2 = alpha^2
-        
-        K_gain = 2 * alpha
-        
-        rhs_term = 2 * v_rel_sq + K_gain.unsqueeze(1) * h_dot + (alpha * alpha).unsqueeze(1) * h
-
-        G = torch.stack([-(lg0 * mask), -(lg1 * mask)], dim=2).to(device)  # (B,K,2)
-        h_qp = (rhs_term * mask).to(device)  # (B,K)
-        
-        Q_qp = Q.to(dtype=torch.float64)
-        p_qp = p.to(dtype=torch.float64)
-        G_qp = G.to(dtype=torch.float64)
-        h_qp_qp = h_qp.to(dtype=torch.float64)
-        e_qp = torch.empty(0, device=device, dtype=torch.float64)
-        
-        if self.training:    
-            x = QPFunction(verbose = 0, maxIter=40)(Q_qp, p_qp, G_qp, h_qp_qp, e_qp, e_qp)
-        else:
-            if nBatch == 1:
-                 x = solver(
-                     Q_qp[0], p_qp[0], G_qp[0], h_qp_qp[0],
-                     device=device,
-                     dtype=torch.float32,
-                     warm_start_x=self._qp_warm_start,
-                 )
-                 self._qp_warm_start = x.detach().cpu().numpy().reshape(-1)
-            else:
-                 x = QPFunction(verbose = 0, maxIter=40)(Q_qp, p_qp, G_qp, h_qp_qp, e_qp, e_qp)
-        return x.to(dtype=obs.dtype)
+        # unicycle_dynamic path intentionally disabled.
+        return torch.zeros_like(u_nom)
 
 #     def __init__(self, 
 #                  nFeatures = 5, 

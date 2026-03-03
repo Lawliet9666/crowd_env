@@ -290,7 +290,9 @@ class SocialForceController:
 
         if obs.size >= 12 and (obs.size - 6) % 6 == 0:
             blocks = obs[6:].reshape(-1, 6)
-            human_rel_positions = blocks[:, 0:2].astype(float)
+            # absolute_obs_to_relative stores obstacle relative position as (p_r - p_h).
+            # Social-force helper expects neighbor positions in robot-centered frame as (p_h - p_r).
+            human_rel_positions = -blocks[:, 0:2].astype(float)
             human_vels = blocks[:, 2:4].astype(float)
             human_radii = blocks[:, 4].astype(float)
             human_masks = np.clip(blocks[:, 5].astype(float), 0.0, 1.0)

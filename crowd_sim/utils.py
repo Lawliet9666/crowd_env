@@ -37,7 +37,6 @@ def relative_obs_dim_from_env_dim(obs_dim: int, topk=None) -> int:
     if dim >= 6 and (dim - 6) % 6 == 0:
         if k is None:
             return dim
-        # relative format uses fixed top-k obstacle slots.
         return 6 + 6 * k
     return dim
 
@@ -68,7 +67,6 @@ def absolute_obs_to_relative(obs, topk=None):
     """
     x = np.asarray(obs, dtype=np.float32).reshape(-1)
     if x.size >= 8 and (x.size - 8) % 6 == 0:
-        # Absolute format -> relative format with fixed top-k slots.
         k_in = (x.size - 8) // 6
         k_out = _validate_topk(topk, allow_none=True)
         if k_out is None:
@@ -94,12 +92,10 @@ def absolute_obs_to_relative(obs, topk=None):
         return out
 
     if x.size >= 6 and (x.size - 6) % 6 == 0:
-        # Already-relative input -> enforce fixed top-k width via truncate/pad.
         k_out = _validate_topk(topk, allow_none=True)
         if k_out is None:
             return x
         out = np.zeros((6 + 6 * k_out,), dtype=np.float32)
-
         k_in = (x.size - 6) // 6
         out[:6] = x[:6]
         take = min(k_in, k_out)
@@ -305,17 +301,28 @@ def build_env(
     env_name: str,
     render_mode: str,
     config: Config,
+    obs_preprocess: str = "relative",
+    obs_topk: int = 5,
+    obs_farest_dist: float = 5.0,
 ):
+    # obs_topk/obs_farest_dist are accepted for interface consistency; conversion
+    # is handled in policy preprocessing (PPO/SAC/eval), not by env wrapper.
     from crowd_sim.env.social_nav import SocialNav
     from crowd_sim.env.social_nav_var_num import SocialNavVarNum
 
+    mode = str(obs_preprocess).lower()
+    if mode not in ("relative", "polar", "none", "raw"):
+        raise ValueError(
+            f"Unknown obs_preprocess '{obs_preprocess}'. Expected one of: relative, polar, none, raw."
+        )
+    _ = int(obs_topk)
+    _ = float(obs_farest_dist)
+
     if env_name == "social_nav":
-        env = SocialNav(render_mode=render_mode, config_file=config)
-    elif env_name == "social_nav_var_num":
-        env = SocialNavVarNum(render_mode=render_mode, config_file=config)
-    else:
-        raise ValueError(f"Unknown env: {env_name}")
-    return env
+        return SocialNav(render_mode=render_mode, config_file=config)
+    if env_name == "social_nav_var_num":
+        return SocialNavVarNum(render_mode=render_mode, config_file=config)
+    raise ValueError(f"Unknown env: {env_name}")
 
 def to_jsonable(obj):
     if isinstance(obj, np.ndarray):

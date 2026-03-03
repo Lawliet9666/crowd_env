@@ -17,13 +17,7 @@ import torch.nn as nn
 from torch.optim import Adam
 from torch.distributions import Normal, Independent
 from rl.network import FCNet
-from crowd_sim.utils import (
-    absolute_obs_batch_to_polar,
-    absolute_obs_batch_to_relative,
-    polar_obs_dim_from_env_dim,
-    relative_obs_dim_from_env_dim,
-)
-# from rl.network_deepsets import DeepSetsPolicy, DeepSetsValueNet
+from crowd_sim.utils import absolute_obs_batch_to_relative, relative_obs_dim_from_env_dim
 
 class PPO:
     """
@@ -58,17 +52,7 @@ class PPO:
             env_obs_dim = int(env.observation_space.shape[0])
             self.act_dim = env.action_space.shape[0]
             act_space = env.action_space
-        mode = str(getattr(self, "obs_preprocess", "relative")).lower()
-        if mode == "relative":
-            self.obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=self.obs_topk))
-        elif mode == "polar":
-            self.obs_dim = int(polar_obs_dim_from_env_dim(env_obs_dim, topk=self.obs_topk))
-        elif mode in ("none", "raw"):
-            self.obs_dim = int(env_obs_dim)
-        else:
-            raise ValueError(
-                f"Unknown obs_preprocess '{self.obs_preprocess}'. Expected one of: relative, polar, none."
-            )
+        self.obs_dim = relative_obs_dim_from_env_dim(env_obs_dim)
 
         # Squashed Gaussian action mapping:
         # z ~ N(mu, sigma), u=tanh(z) in [-1, 1], a=bias+scale*u in [low, high]
@@ -90,8 +74,6 @@ class PPO:
         actor_kwargs.update(getattr(self, "policy_kwargs", {}))
 
         self.actor = policy_class(self.obs_dim, self.act_dim, **actor_kwargs).to(self.device)
-        # if issubclass(policy_class, DeepSetsPolicy):
-        #     self.critic = DeepSetsValueNet(self.obs_dim, 1).to(self.device)
         # else:
         self.critic = FCNet(self.obs_dim, 1).to(self.device)
 
@@ -126,6 +108,7 @@ class PPO:
             'barrier_min_batch': [], # min barrier value in batch
             'barrier_avg_batch': [], # average barrier value in batch
         }
+
     def learn(self, total_timesteps):
         """
             Train the actor and critic networks. Here is where the main PPO algorithm resides.
@@ -159,16 +142,13 @@ class PPO:
             # We compute this outside the main training loop to avoid slowing down backprop.
             # Obs indices: 6 (rel_x), 7 (rel_y)
             with torch.no_grad():
-                if str(self.obs_preprocess).lower() == "relative" and batch_obs.size(1) > 7:
-                    rel_x = batch_obs[:, 6]
-                    rel_y = batch_obs[:, 7]
-                    dist_sq = rel_x**2 + rel_y**2
-                    barrier = dist_sq - self.safe_dist**2
-                    self.logger['barrier_min_batch'] = torch.min(barrier).item()
-                    self.logger['barrier_avg_batch'] = torch.mean(barrier).item()
-                else:
-                    self.logger['barrier_min_batch'] = float("nan")
-                    self.logger['barrier_avg_batch'] = float("nan")
+                rel_x = batch_obs[:, 6]
+                rel_y = batch_obs[:, 7]
+                dist_sq = rel_x**2 + rel_y**2
+                barrier = dist_sq - self.safe_dist**2
+                min_barrier = torch.min(barrier).item()
+                self.logger['barrier_min_batch'] = min_barrier
+                self.logger['barrier_avg_batch'] = torch.mean(barrier).item()
             # ---------------------------------------------
 
             # Calculate advantage using GAE
@@ -364,8 +344,8 @@ class PPO:
             
             while not done:
                 with torch.no_grad():
-                    obs_proc = self._preprocess_obs(obs)
-                    obs_tensor = torch.tensor(obs_proc, dtype=torch.float).to(self.device).unsqueeze(0) # Add batch dim
+                    obs_rel = absolute_obs_batch_to_relative(obs)
+                    obs_tensor = torch.tensor(obs_rel, dtype=torch.float).to(self.device).unsqueeze(0) # Add batch dim
                     # Use mean action directly (deterministic)
                     if hasattr(self, 'actor'):
                         action_tensor, _ = self._squash_action(self.actor(obs_tensor))
@@ -511,13 +491,13 @@ class PPO:
                 t += 1 # Increment timesteps ran this batch so far
 
                 # Track observations in this batch
-                obs_proc = self._preprocess_obs(obs)
-                batch_obs.append(obs_proc)
+                obs_rel = absolute_obs_batch_to_relative(obs)
+                batch_obs.append(obs_rel)
 
                 # Calculate action and make a step in the env. 
                 # Note that rew is short for reward.
                 action, log_prob = self.get_action(obs)
-                obs_tensor = torch.tensor(obs_proc, dtype=torch.float).to(self.device)
+                obs_tensor = torch.tensor(obs_rel, dtype=torch.float).to(self.device)
                 val = self.critic(obs_tensor)
 
                 obs, rew, terminated, truncated, infos = self.env.step(action)
@@ -570,8 +550,8 @@ class PPO:
                 log_prob - the log probability of the selected action in the distribution
         """
         # Query the actor network for a mean action
-        obs_proc = self._preprocess_obs(obs)
-        obs = torch.tensor(obs_proc, dtype=torch.float).to(self.device)
+        obs_rel = absolute_obs_batch_to_relative(obs)
+        obs = torch.tensor(obs_rel, dtype=torch.float).to(self.device)
         mean = self.actor(obs)  # latent mean (unbounded)
         dist = self._build_action_dist(mean)
 
@@ -591,22 +571,6 @@ class PPO:
 
         # Return the sampled action and the log probability of that action in our distribution
         return action.detach().cpu().numpy(), log_prob.detach().cpu().numpy()
-
-    def _preprocess_obs(self, obs):
-        mode = str(getattr(self, "obs_preprocess", "relative")).lower()
-        if mode == "relative":
-            return absolute_obs_batch_to_relative(obs, topk=self.obs_topk)
-        if mode == "polar":
-            return absolute_obs_batch_to_polar(
-                obs,
-                topk=self.obs_topk,
-                farest_dist=self.obs_farest_dist,
-            )
-        if mode in ("none", "raw"):
-            return np.asarray(obs, dtype=np.float32)
-        raise ValueError(
-            f"Unknown obs_preprocess '{self.obs_preprocess}'. Expected one of: relative, polar, none."
-        )
 
     def evaluate(self, batch_obs, batch_acts):
         """
@@ -694,9 +658,6 @@ class PPO:
         self.save_freq = 0                  # Checkpoint interval in timesteps (0 means disabled)
         self.eval_freq_timesteps = 200000                # Eval cadence in timesteps
         self.eval_episodes = 50                          # Episodes per periodic evaluation
-        self.obs_preprocess = "relative"                 # relative | polar | none
-        self.obs_topk = 5                                # top-k obstacles used by relative preprocessing
-        self.obs_farest_dist = 5.0                       # padding/distance cap used by polar preprocessing
 
         # Miscellaneous parameters
         self.render = False                             # If we should render during rollout

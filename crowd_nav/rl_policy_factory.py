@@ -1,21 +1,11 @@
-"""Shared policy class registry for RL actors."""
+"""Factory helpers for RL policy classes."""
 
-def get_policy_class(method: str):
+
+def get_rl_policy_class(method: str):
+    method = (method or "").strip()
     if method == "rl":
         from rl.network import FCNet
         return FCNet
-    if method == "rlatt":
-        from rl.network_att import FCNet as FCNetAtt
-        return FCNetAtt
-    if method == "rldeepsets":
-        from rl.network_deepsets import DeepSetsPolicy
-        return DeepSetsPolicy
-    if method == "rldeepsetscbfgamma":
-        import rl.network_deepsets_qpth_v1 as deepsets_cbf_u_gamma
-        return deepsets_cbf_u_gamma.BarrierNet
-    if method == "rldeepsetscvarbetaradius":
-        import rl.network_deepsets_qpth_cvar_v2 as deepsets_cvar_cbf_u_beta_r
-        return deepsets_cvar_cbf_u_beta_r.BarrierNet
     if method == "rlcbf":
         import rl.network_qpth_v0 as cbf_u
         return cbf_u.BarrierNet
@@ -34,3 +24,8 @@ def get_policy_class(method: str):
     if method in ("orca", "social_force"):
         raise ValueError(f"method '{method}' is supported in main_opt.py, not main_vec.py")
     raise ValueError(f"Unknown method {method}")
+
+
+def get_policy_class(method: str):
+    """Backward-compatible alias."""
+    return get_rl_policy_class(method)

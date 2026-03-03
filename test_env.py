@@ -16,15 +16,17 @@ def run_env_test(
     seed=None,
     human_policy=None,
     human_num=20,
+    reset_options=None,
 ):
     config = Config()
 
-    # parameter overrides for testing
+    # # parameter overrides for testing
     config.human.num_humans = human_num  # Test with multiple humans to verify dynamics and rendering
-    config.env.max_obstacles_obs = human_num  # how many humans are included in the observation  
-    config.robot.vmax = 1.0  # Set robot max speed to a reasonable value for testing
-    config.robot.radius = 0.3  # Set robot radius to a reasonable value for testing
-    config.robot.wmax = np.pi / 2  # Set max angular velocity for unicycle (if applicable)
+    # config.env.max_obstacles_obs = 5  # how many humans are included in the observation  
+    # config.robot.vmax = 1.0  # Set robot max speed to a reasonable value for testing
+    # config.robot.radius = 0.3  # Set robot radius to a reasonable value for testing
+    # config.robot.wmax = np.pi / 2  # Set max angular velocity for unicycle (if applicable)
+    # config.robot.ini_goal_dist = 6.0  #  initial robot-goal distance  
     # config.reward
     
     if human_policy is not None:
@@ -32,8 +34,7 @@ def run_env_test(
     render_mode = "rgb_array"
     env = build_env(env_name, render_mode, config)
 
-    obs, info = env.reset(seed=seed)
-    import pdb; pdb.set_trace()
+    obs, info = env.reset(seed=seed, options=reset_options)
 
     frames = []
     done = False
@@ -67,6 +68,8 @@ def run_env_test(
         gif_path = os.path.join(save_dir, f"seed_{seed}.gif")
         imageio.mimsave(gif_path, frames, fps=10)
         print(f"Saved GIF to {gif_path}")
+    else:
+        gif_path = None
 
     print(f"Steps: {step} | Total Reward: {total_reward:.2f}")
     result = "running"
@@ -104,7 +107,15 @@ if __name__ == "__main__":
     parser.add_argument("--human_policy", type=str, default=None, choices=["orca", "social_force", "potential_field", "nominal"], help="Human policy to use")
     parser.add_argument("--human_num", type=int, default=20, help="Number of humans in the environment")
     parser.add_argument("--num_seeds", type=int, default=8, help="How many consecutive seeds to run")
+    parser.add_argument(
+        "--option",
+        type=str,
+        default="circle",
+        choices=["crossing", "circle"],
+        help="'crossing' or 'circle', passed as env.reset(options={'scenario': <option>})",
+    )
     args = parser.parse_args()
+    reset_options = {"scenario": args.option}
 
     if args.seed is not None:
         np.random.seed(args.seed)
@@ -126,6 +137,7 @@ if __name__ == "__main__":
             seed=seed,
             human_policy=args.human_policy,
             human_num=args.human_num,
+            reset_options=reset_options,
         )
         summaries.append(summary)
 

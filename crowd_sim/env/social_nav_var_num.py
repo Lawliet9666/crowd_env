@@ -60,8 +60,8 @@ class SocialNavVarNum(SocialNav):
                 while True:
                     angle = rng.random() * np.pi * 2
                     noise_range = self.human_init_noise_range
-                    px_noise = rng.uniform(0, 1) * noise_range
-                    py_noise = rng.uniform(0, 1) * noise_range
+                    px_noise = rng.uniform(-0.5 * noise_range, 0.5 * noise_range)
+                    py_noise = rng.uniform(-0.5 * noise_range, 0.5 * noise_range)
                     hx = self.human_circle_radius * np.cos(angle) + px_noise
                     hy = self.human_circle_radius * np.sin(angle) + py_noise
                     collide = False
@@ -117,7 +117,7 @@ class SocialNavVarNum(SocialNav):
 
         self.num_humans = int(num_humans)
         self.humans = [
-            HumanIntegrator(self.dt)
+            HumanIntegrator(self.dt, gmm_params=self.human_gmm_params)
             for _ in range(self.num_humans)
         ]
         self.human_positions = np.zeros((self.num_humans, 2), dtype=float)
@@ -141,7 +141,7 @@ class SocialNavVarNum(SocialNav):
         if hasattr(rng, "integers"):
             return int(rng.integers(low, high))
         return int(rng.randint(low, high))
-        
+
     def _sample_new_human_goal(self, idx):
         """
         Sample a new goal for one human following circle-based sampling with velocity-scaled noise.

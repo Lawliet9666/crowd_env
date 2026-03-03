@@ -286,7 +286,9 @@ class ORCAController:
         # Flat observation format: 6 + K*6 with [rel_x, rel_y, vx, vy, radius, mask]
         if obs.size >= 12 and (obs.size - 6) % 6 == 0:
             blocks = obs[6:].reshape(-1, 6)
-            human_rel_positions = blocks[:, 0:2].astype(float)
+            # absolute_obs_to_relative stores obstacle relative position as (p_r - p_h).
+            # ORCA expects neighbor positions in the robot-centered frame as (p_h - p_r).
+            human_rel_positions = -blocks[:, 0:2].astype(float)
             human_vels = blocks[:, 2:4].astype(float)
             human_radii = blocks[:, 4].astype(float)
             human_masks = np.clip(blocks[:, 5].astype(float), 0.0, 1.0)
@@ -294,20 +296,6 @@ class ORCAController:
 
         # # Legacy single-obstacle format: [.., rel_rx_hx, rel_ry_hy, hvx, hvy, h_radius]
         # # where rel is (p_r - p_h). Convert to (p_h - p_r) by negating.
-        # if obs.size >= 11:
-        #     rel_r_minus_h = obs[6:8]
-        #     hv = obs[8:10]
-        #     hr = float(obs[10])
-        #     # No mask in legacy format; if rel and vel are both ~0 treat as "no visible obstacle".
-        #     if np.linalg.norm(rel_r_minus_h) < 1e-8 and np.linalg.norm(hv) < 1e-8:
-        #         human_positions = np.zeros((0, 2), dtype=float)
-        #         human_vels = np.zeros((0, 2), dtype=float)
-        #         human_radii = np.zeros((0,), dtype=float)
-        #     else:
-        #         human_positions = np.asarray([[-rel_r_minus_h[0], -rel_r_minus_h[1]]], dtype=float)
-        #         human_vels = np.asarray([[hv[0], hv[1]]], dtype=float)
-        #         human_radii = np.asarray([hr], dtype=float)
-        #     return goal_rel, robot_vel, theta, robot_radius, human_positions, human_vels, human_radii
 
         raise ValueError(f"Unsupported observation shape for ORCAController: {obs.shape}")
 

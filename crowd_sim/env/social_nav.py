@@ -67,7 +67,11 @@ class SocialNav(gym.Env):
         self.human_radius_min = float(human_params["radius"])
         self.human_radius_max = float(human_params["radius"])
 
-        self.humans = [HumanIntegrator(self.dt) for _ in range(self.num_humans)]
+        self.human_gmm_params = dict(human_params.get("gmm", {}))
+        self.humans = [
+            HumanIntegrator(self.dt, gmm_params=self.human_gmm_params)
+            for _ in range(self.num_humans)
+        ]
     
         self.arena_size = human_params.get('arena_size', 6.0)
         self.human_circle_radius = self.arena_size * np.sqrt(2) 
@@ -154,7 +158,7 @@ class SocialNav(gym.Env):
         # 1. Basic Environment Reset & Seeding
         super().reset(seed=seed)
         self.current_step = 0
-        self.current_scenario = options.get("scenario") if options else None
+        self.current_scenario = options.get("scenario") if isinstance(options, dict) else options
         
         if self.orca_helper is not None:
             self.orca_helper.reset()
@@ -218,7 +222,6 @@ class SocialNav(gym.Env):
         else:
             sf_seed = int(self.np_random.integers(0, max_seed))
         self.sf_helper.set_seed(sf_seed)
-
 
     def step(self, action):
         # 1. robot position update
@@ -745,7 +748,7 @@ class SocialNav(gym.Env):
             human_goals[i] = np.array([-5.0, base_y + offsets[i]])
 
         human_vmaxs = np.full((self.num_humans,), 1.8, dtype=float)
-        human_radii = np.full((self.num_humans,), 0.3, dtype=float)
+        human_radii = np.full((self.num_humans,), 1.0, dtype=float)
         human_vels = np.zeros((self.num_humans, 2), dtype=float)
         robot_vel = np.zeros(2)
         return robot_pos, goal_pos, robot_theta, robot_vel, human_positions, human_goals, human_vels, human_vmaxs, human_radii

@@ -23,16 +23,19 @@ def cvar_coeff_from_beta(beta: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     return pdf / beta
 
 class BarrierNet(nn.Module):
-    def __init__(self, nFeatures, 
-                 nCls, 
+    def __init__(self, 
+                 nFeatures, 
+                 nCls,
                  nHidden1 = 256, 
                  nHidden21 = 256, 
                  nHidden22 = 256, 
-                 safe_dist=0.8, 
-                 alpha=2.0, 
-                 beta=0.1,
-                 robot_type='single_integrator', vmax=3.0, amax=3.0, omega_max=3.0,
-                 gmm_weights=None, gmm_stds=None, gmm_lateral_ratio=0.3, **kwargs):
+                 safe_dist = 0.8,
+                 alpha = 2.0,
+                 beta = 0.2,
+                 robot_type='single_integrator',
+                 vmax = 3.0, amax = 3.0, omega_max = 3.0,
+                 gmm_weights=None, gmm_stds=None, gmm_lateral_ratio=0.3
+            ):
         super().__init__()
         self.nFeatures = nFeatures
         self.nCls = nCls
@@ -45,7 +48,7 @@ class BarrierNet(nn.Module):
         self.last_alpha = alpha
         self.last_beta = beta
         self._qp_warm_start = None
-
+        
         if self.robot_type == 'single_integrator':
             self.u_min = [-vmax, -vmax]
             self.u_max = [vmax, vmax]
@@ -64,9 +67,10 @@ class BarrierNet(nn.Module):
             self._cbf_name = "unknown"
 
         print(
-            f"[CVaRNet v2] robot_type={self.robot_type}, safe_dist={self.safe_dist:.3f}, umax={self.u_max}",
+            f"[CVaRNet] robot_type={self.robot_type}, safe_dist={self.safe_dist:.3f}, umax={self.u_max}",
             flush=True,
         )
+        
         self.predictor = TrajPredictor(
             lateral_ratio=gmm_lateral_ratio,
             weights=gmm_weights,
@@ -75,61 +79,11 @@ class BarrierNet(nn.Module):
 
         self.fc1 = nn.Linear(nFeatures, nHidden1)
         self.fc21 = nn.Linear(nHidden1, nHidden21) 
-        self.fc22 = nn.Linear(nHidden1, nHidden22)
-        self.fc23 = nn.Linear(nHidden1, nHidden22)  # for radius 
+        self.fc22 = nn.Linear(nHidden1, nHidden22) 
         self.fc31 = nn.Linear(nHidden21, nCls) 
         self.fc32 = nn.Linear(nHidden22, 1) 
-        self.fc33 = nn.Linear(nHidden22, 1)  # for radius
-
-    def _extract_obstacle_blocks(self, obs):
-        """
-        Parse obstacle observations to a fixed tensor form:
-          rel:  (B, K, 2)   [p_r - p_h]
-          vel:  (B, K, 2)   [v_hx, v_hy]
-          mask: (B, K)      1 real / 0 dummy
-
-        Supports:
-        1) New local-sensing format: [robot(6), K * (rel_x, rel_y, vx, vy, radius, mask)]
-        2) Legacy single-obstacle format: [robot(6), rel_x, rel_y, vx, vy, radius]
-        """
-        nBatch = obs.size(0)
-        device = obs.device
-        dtype = obs.dtype
-
-        if obs.size(1) >= 12 and ((obs.size(1) - 6) % 6 == 0):
-            blocks = obs[:, 6:].reshape(nBatch, -1, 6)
-            rel = blocks[:, :, 0:2]
-            vel = blocks[:, :, 2:4]
-            mask = blocks[:, :, 5].clamp(0.0, 1.0)
-        elif obs.size(1) >= 11:
-            rel = obs[:, 6:8].unsqueeze(1)
-            vel = obs[:, 8:10].unsqueeze(1)
-            mask = torch.ones((nBatch, 1), device=device, dtype=dtype)
-        else:
-            rel = torch.zeros((nBatch, 1, 2), device=device, dtype=dtype)
-            vel = torch.zeros((nBatch, 1, 2), device=device, dtype=dtype)
-            mask = torch.zeros((nBatch, 1), device=device, dtype=dtype)
-
-        return rel, vel, mask
-
-    def _predict_gmm_multi(self, human_vel):
-        """
-        human_vel: (B, K, 2)
-        Returns:
-          means: (B, K, M, 2)
-          variances: (B, K, M)
-        """
-        bsz, k, _ = human_vel.shape
-        flat_vel = human_vel.reshape(-1, 2)  # (B*K,2)
-        _, means_flat, variances_flat = self.predictor.predict_gmm(flat_vel)
-        m = means_flat.shape[1]
-        means = means_flat.reshape(bsz, k, m, 2)
-        variances = variances_flat.reshape(bsz, k, m)
-        return means, variances
 
     def forward(self, obs):
-        # if torch.rand(1).item() < 0.001:
-        #      print("DEBUG: BarrierNet v2 Forward")
         if isinstance(obs, np.ndarray):
             obs = torch.tensor(obs, dtype=torch.float)
         obs = obs.to(self.fc1.weight.device)
@@ -140,30 +94,22 @@ class BarrierNet(nn.Module):
         x = F.relu(self.fc1(obs))
         x21 = F.relu(self.fc21(x))
         x22 = F.relu(self.fc22(x))
-        x23 = F.relu(self.fc23(x))  # reuse fc22 for radius
 
         u_nom = self.fc31(x21)
-        # beta = self.beta * torch.sigmoid(self.fc32(x22)).squeeze(-1)  # (B,) in [0, self.beta]
-        beta = 1 * torch.sigmoid(self.fc32(x22)).squeeze(-1)  # (B,) in [0, 1]
+        beta = self.beta *torch.sigmoid(self.fc32(x22)).squeeze(-1)  # (B,)
         self.last_beta = beta
 
-        # Predict a multiplier between 1.0 and 2.0 (or 0 and 2, but 1.0 is safer baseline)
-        # r_scale = 2.0*torch.sigmoid(self.fc33(x23)).squeeze(-1) # (B,) in [0, 2]
-        r_scale = 1.0 + 1.5*torch.sigmoid(self.fc33(x23)).squeeze(-1) # (B,) in [0, 2]
-        r_safe_learned = self.safe_dist * r_scale
-        self.last_r_safe = r_safe_learned
-
         if self.robot_type == 'single_integrator':
-            u_safe = self.dCVaR_CBF_SI(obs, u_nom, beta, r_safe_learned)
+            u_safe = self.dCVaR_CBF_SI(obs, u_nom, beta)
         elif self.robot_type == 'unicycle':
-            u_safe = self.dCVaR_CBF_Unicycle(obs, u_nom, beta, r_safe_learned)
+            u_safe = self.dCVaR_CBF_Unicycle(obs, u_nom, beta)
         elif self.robot_type == 'unicycle_dynamic':
             raise NotImplementedError("dCVaR_CBF_UnicycleDynamic not implemented")
         else:
-            raise NotImplementedError(f"Robot type {self.robot_type} not supported in CVaR BarrierNet v2")
+            raise NotImplementedError(f"Robot type {self.robot_type} not supported in CVaR BarrierNet")
         return u_safe
 
-    def dCVaR_CBF_SI(self, obs, u_nom, beta, r_safe_learned):
+    def dCVaR_CBF_SI(self, obs, u_nom, beta):
         """
         Solve: min ||u - u_nom||^2
         s.t. for each GMM mode i:
@@ -182,40 +128,48 @@ class BarrierNet(nn.Module):
         p = -2 *u_nom  
         Q = 2 * Q
 
-        rel, human_vel, mask = self._extract_obstacle_blocks(obs)  # (B,K,2), (B,K,2), (B,K)
-        rel_x = rel[:, :, 0]
-        rel_y = rel[:, :, 1]
+        rel_x = obs[:, 6]
+        rel_y = obs[:, 7]
+        human_vel = obs[:, 8:10]  # (B,2)
+        rel = obs[:, 6:8]  # (B,2)
 
-        # R_safe = self.safe_dist
-        # Use learned r_safe
+        R_safe = self.safe_dist
         dist_sq = rel_x**2 + rel_y**2
-        
-        # Expand r_safe_learned for broadcasting against (B,)
-        # Note: h(x) = dist^2 - (r_safe_learned)^2
-        h = dist_sq - r_safe_learned.unsqueeze(1)**2
+        h = dist_sq - R_safe**2
         # barrier h(x) = ||rel||^2 - R^2
 
-        cvar_coeff = cvar_coeff_from_beta(beta).unsqueeze(1).unsqueeze(2)  # (B,1,1)
+        cvar_coeff = cvar_coeff_from_beta(beta)  # (B,)
         
-        means, variances = self._predict_gmm_multi(human_vel)  # (B,K,M,2), (B,K,M)
+        _ , means, variances = self.predictor.predict_gmm(human_vel)
+        M = means.size(1)
 
 
         # sigma_f = sqrt(4*sigma^2*||rel||^2)  (isotropic Sigma_v = sigma^2 I)
-        rel_norm_sq = (rel ** 2).sum(dim=2, keepdim=True)            # (B,K,1)
+        rel_norm_sq = (rel ** 2).sum(dim=1, keepdim=True)            # (B,1)
+        # sigma_f = torch.sqrt(4.0 * variances * rel_norm_sq)          # (B,M)
         sigma_f = torch.sqrt(4.0 * variances * rel_norm_sq + 1e-8)
 
         # rhs_i = -alpha*h + 2*rel^T mu_v_i + sigma_f * cvar_coeff
-        # 2*rel^T mu: (B,K,M)
-        rel_dot_mu = 2.0 * (means * rel.unsqueeze(2)).sum(dim=3)
+        # 2*rel^T mu: (B,M)
+        rel_dot_mu = 2.0 * (means * rel.unsqueeze(1)).sum(dim=2)     # (B,M)
 
-        rhs = (-self.alpha * h.unsqueeze(2)) + rel_dot_mu + (sigma_f * cvar_coeff)  # (B,K,M)
+        # Fix broadcasting: cvar_coeff is (B,), sigma_f is (B,M)
+        # We need cvar_coeff to broadcast over M
+        cvar_coeff = cvar_coeff.unsqueeze(1) # (B, 1)
 
-        # Collapse GMM modes to one robust rhs per obstacle slot.
+        rhs = (-self.alpha * h.unsqueeze(1)) + rel_dot_mu + (sigma_f * cvar_coeff)  # (B,M)
+        # # qpth expects G u <= h_qp
+        # h_qp = -rhs  # (B,M)
+        # # G: (B,M,2) each row is [-2*rel_x, -2*rel_y]
+        # G = (-2.0 * rel).unsqueeze(1).expand(-1, M, -1).contiguous()  # (B,M,2)
+
+        # collapse to worst-case single constraint (since G rows are identical anyway)
+        # rhs_wc = rhs.max(dim=1).values                 # (B,)
         tau = 0.1   # small temperature for smooth max
-        rhs_wc = tau * torch.logsumexp(rhs / tau, dim=2)  # (B,K)
+        rhs_wc = tau * torch.logsumexp(rhs / tau, dim=1)
 
-        G = (-2.0 * rel * mask.unsqueeze(-1)).contiguous()     # (B,K,2)
-        h_qp = (-(rhs_wc * mask)).contiguous()                 # (B,K)
+        G = (-2.0 * rel).unsqueeze(1).contiguous()     # (B,1,2)
+        h_qp = (-rhs_wc).unsqueeze(1).contiguous()     # (B,1)
 
         Q_qp = Q.to(dtype=torch.float64)
         p_qp = p.to(dtype=torch.float64)
@@ -238,19 +192,21 @@ class BarrierNet(nn.Module):
                  x = QPFunction(verbose = 0, maxIter=40)(Q_qp, p_qp, G_qp, h_qp_qp, e_qp, e_qp)
         return x.to(dtype=obs.dtype)
 
-    def dCVaR_CBF_Unicycle(self, obs, u_nom_xy, beta, r_safe_learned):
+    def dCVaR_CBF_Unicycle(self, obs, u_nom_xy, beta):
         """
-        Lookahead CVaR-CBF for Unicycle with learned safe radius.
+        Lookahead CVaR-CBF for Unicycle.
+        Constraint: Lg(u) >= -Lf - alpha*h + CVaR term
         """
         nBatch = obs.size(0)
         device = self.fc1.weight.device
 
         # Obs parsing
         theta = obs[:, 4]
-        rel, human_vel, mask = self._extract_obstacle_blocks(obs)  # (B,K,2), (B,K,2), (B,K)
+        rel = obs[:, 6:8]
+        human_vel = obs[:, 8:10]  # (B,2)
 
         epsilon = 0.2
-        R_safe = r_safe_learned.unsqueeze(1) + epsilon
+        R_safe = self.safe_dist + epsilon
 
         c = torch.cos(theta)
         s = torch.sin(theta)
@@ -271,45 +227,38 @@ class BarrierNet(nn.Module):
         Q = Q + 1e-6 * torch.eye(self.nCls, device=device, dtype=obs.dtype).unsqueeze(0)
         p = -2.0 * torch.bmm(JT, u_nom_xy.unsqueeze(-1)).squeeze(-1)
 
-
-        # # QP: min ||u - u_nom||^2
-        # Q = torch.eye(self.nCls, device=device).unsqueeze(0).expand(nBatch, self.nCls, self.nCls)
-        # p = -2 * u_nom
-        # Q = 2 * Q + 1e-6 * torch.eye(self.nCls, device=device)
-
-
         # Lookahead relative position
-        heading = torch.stack([c, s], dim=1).unsqueeze(1)  # (B,1,2)
-        p_L = rel + epsilon * heading  # (B,K,2)
+        p_L = rel + epsilon * torch.stack([c, s], dim=1)  # (B,2)
 
-        h = (p_L[:, :, 0] ** 2 + p_L[:, :, 1] ** 2) - R_safe ** 2
+        h = (p_L[:, 0] ** 2 + p_L[:, 1] ** 2) - R_safe ** 2
 
         # Lg terms for u = [v, w]
-        lg_v = 2 * (p_L[:, :, 0] * c.unsqueeze(1) + p_L[:, :, 1] * s.unsqueeze(1))
-        lg_w = 2 * epsilon * (p_L[:, :, 1] * c.unsqueeze(1) - p_L[:, :, 0] * s.unsqueeze(1))
+        lg_v = 2 * (p_L[:, 0] * c + p_L[:, 1] * s)
+        lg_w = 2 * epsilon * (p_L[:, 1] * c - p_L[:, 0] * s)
 
         # CVaR term from GMM prediction of human velocity
-        cvar_coeff = cvar_coeff_from_beta(beta).unsqueeze(1).unsqueeze(2)  # (B,1,1)
-        means, variances = self._predict_gmm_multi(human_vel)  # (B,K,M,2), (B,K,M)
+        cvar_coeff = cvar_coeff_from_beta(beta)  # (B,)
+        _, means, variances = self.predictor.predict_gmm(human_vel)
 
-        pL_norm_sq = (p_L ** 2).sum(dim=2, keepdim=True)  # (B,K,1)
-        sigma_f = torch.sqrt(4.0 * variances * pL_norm_sq + 1e-8)  # (B,K,M)
+        pL_norm_sq = (p_L ** 2).sum(dim=1, keepdim=True)  # (B,1)
+        sigma_f = torch.sqrt(4.0 * variances * pL_norm_sq + 1e-8)  # (B,M)
 
-        rel_dot_mu = 2.0 * (means * p_L.unsqueeze(2)).sum(dim=3)  # (B,K,M)
+        rel_dot_mu = 2.0 * (means * p_L.unsqueeze(1)).sum(dim=2)  # (B,M)
+        cvar_coeff = cvar_coeff.unsqueeze(1)  # (B,1)
 
-        rhs = (-self.alpha * h.unsqueeze(2)) + rel_dot_mu + (sigma_f * cvar_coeff)  # (B,K,M)
+        rhs = (-self.alpha * h.unsqueeze(1)) + rel_dot_mu + (sigma_f * cvar_coeff)  # (B,M)
 
         tau = 0.1
-        rhs_wc = tau * torch.logsumexp(rhs / tau, dim=2)  # (B,K)
+        rhs_wc = tau * torch.logsumexp(rhs / tau, dim=1)  # (B,)
 
-        G = torch.stack([-(lg_v * mask), -(lg_w * mask)], dim=2).contiguous()  # (B,K,2)
-        h_qp = (-(rhs_wc * mask)).contiguous()  # (B,K)
+        G = torch.stack([-lg_v, -lg_w], dim=1).unsqueeze(1).contiguous()  # (B,1,2)
+        h_qp = (-rhs_wc).unsqueeze(1).contiguous()  # (B,1)
 
         Q_qp = Q.to(dtype=torch.float64)
         p_qp = p.to(dtype=torch.float64)
         G_qp = G.to(dtype=torch.float64)
         h_qp_qp = h_qp.to(dtype=torch.float64)
-        e_qp = torch.empty(0, device=self.fc1.weight.device, dtype=torch.float64)
+        e_qp = torch.empty(0, device=device, dtype=torch.float64)
 
         if self.training:    
             x = QPFunction(verbose = 0, maxIter=40)(Q_qp, p_qp, G_qp, h_qp_qp, e_qp, e_qp)
@@ -325,4 +274,7 @@ class BarrierNet(nn.Module):
             else:
                  x = QPFunction(verbose = 0, maxIter=40)(Q_qp, p_qp, G_qp, h_qp_qp, e_qp, e_qp)
         return x.to(dtype=obs.dtype)
+
+
+
         
