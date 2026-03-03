@@ -37,8 +37,19 @@ class RLEvalActorAdapter:
     def __getattr__(self, name):
         return getattr(self.actor, name)
 
-def _compute_action(actor, obs):
-    obs = absolute_obs_to_relative(obs)
+def _preprocess_obs(obs, obs_preprocess="relative"):
+    mode = str(obs_preprocess).lower()
+    if mode == "relative":
+        return absolute_obs_to_relative(obs)
+    if mode in ("polar", "none", "raw"):
+        return np.asarray(obs, dtype=np.float32).reshape(-1)
+    raise ValueError(
+        f"Unknown obs_preprocess '{obs_preprocess}'. Expected one of: relative, polar, none."
+    )
+
+
+def _compute_action(actor, obs, obs_preprocess="relative"):
+    obs = _preprocess_obs(obs, obs_preprocess=obs_preprocess)
     if hasattr(actor, "deterministic"):
         actor.deterministic = True
     out = actor.get_action(obs)
@@ -253,7 +264,7 @@ def _record_executed_action(metrics, env, fallback_action):
     metrics["action_exec"].append(np.array(executed, dtype=float))
 
 
-def rollout(actor, env, base_seed=0, track_signals=False, unom_holder=None):
+def rollout(actor, env, base_seed=0, track_signals=False, unom_holder=None, obs_preprocess="relative"):
     ep_cnt = 0
     while True:
         obs, _ = env.reset(seed=base_seed + ep_cnt)
@@ -273,7 +284,7 @@ def rollout(actor, env, base_seed=0, track_signals=False, unom_holder=None):
 
             _render_step(env, frames)
 
-            action = _compute_action(actor, obs)
+            action = _compute_action(actor, obs, obs_preprocess=obs_preprocess)
             _record_actor_metrics(metrics, actor, action, unom_holder)
 
             obs, rew, terminated, truncated, info = env.step(action)
@@ -297,6 +308,7 @@ def eval_policy(
     save_path=None,
     base_seed=None,
     method=None,
+    obs_preprocess="relative",
     visualize_episodes=20,
 ):
     total_episodes = 0
@@ -320,6 +332,7 @@ def eval_policy(
                 base_seed=base_seed,
                 track_signals=track_signals,
                 unom_holder=unom_holder,
+                obs_preprocess=obs_preprocess,
             )
         ):
             _log_summary(ep_len, ep_ret, ep_num, ep_collision, ep_success)
@@ -385,6 +398,7 @@ def eval_policy(
                 "max_episodes": max_episodes,
                 "base_seed": base_seed,
                 "method": mode,
+                "obs_preprocess": str(obs_preprocess).lower(),
             },
             "results": summary,
         }
@@ -392,7 +406,7 @@ def eval_policy(
             json.dump(log_payload, f, indent=2)
 
 
-def run_crossing_scenario(policy, env, save_path=None):
+def run_crossing_scenario(policy, env, save_path=None, obs_preprocess="relative"):
     actor = policy
 
     obs, _ = env.reset(options={"scenario": "crossing"})
@@ -403,7 +417,7 @@ def run_crossing_scenario(policy, env, save_path=None):
 
     while not done:
         _render_step(env, frames)
-        action = _compute_action(actor, obs)
+        action = _compute_action(actor, obs, obs_preprocess=obs_preprocess)
 
         obs, _, terminated, truncated, info = env.step(action)
         if info.get("is_collision", False):

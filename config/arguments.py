@@ -8,7 +8,7 @@ def get_args():
 	# COMMON runtime arguments (shared by SAC and PPO)
 	# -------------------------------------------------------------------------
 	parser.add_argument('--mode', dest='mode', type=str, default='train', choices=['train', 'test'])  # can be 'train' or 'test'
-	parser.add_argument('--algo', dest='algo', type=str, default='sac', choices=['sac', 'ppo'], help='RL algorithm to run')
+	parser.add_argument('--algo', dest='algo', type=str, default='ppo', choices=['sac', 'ppo'], help='RL algorithm to run')
 	parser.add_argument('--actor_model', dest='actor_model', type=str, default='')   # for test mode: trained actor checkpoint
 	parser.add_argument('--critic_model', dest='critic_model', type=str, default='')  # optional warm-start critic checkpoint
 	parser.add_argument(
@@ -24,6 +24,25 @@ def get_args():
 		],
 		help='rl, rlatt, rldeepsets, rldeepsetscbfgamma, rldeepsetscvarbetaradius, rlcbfgamma, rlcvarbetaradius, orca, social_force, nominal, cbfqp, cvarqp, adapcvarqp, drcvarqp'
 	)
+	parser.add_argument(
+		'--obs_preprocess',
+		type=str,
+		default='relative',
+		choices=['relative', 'polar', 'none'],
+		help='Observation preprocessing mode before policy input'
+	)
+	parser.add_argument(
+		'--polar_topk',
+		type=int,
+		default=5,
+		help='Top-k obstacles used by polar observation wrapper'
+	)
+	parser.add_argument(
+		'--polar_farest_dist',
+		type=float,
+		default=5.0,
+		help='Distance cap/padding value for polar observation wrapper'
+	)
 
 	# -------------------------------------------------------------------------
 	# COMMON optimization/logging arguments (shared by SAC and PPO)
@@ -32,6 +51,12 @@ def get_args():
 	parser.add_argument('--timesteps_per_batch', type=int, default=4096, help='Logging interval in env steps')
 	parser.add_argument('--max_timesteps_per_episode', type=int, default=None, help='Override env max episode steps')
 	parser.add_argument('--gamma', type=float, default=0.99)
+	parser.add_argument(
+		'--num_envs',
+		type=int,
+		default=8,
+		help='Number of vectorized environments for main_vec.py (0 = use cpu_count)'
+	)
 
 	# -------------------------------------------------------------------------
 	# SAC-only arguments

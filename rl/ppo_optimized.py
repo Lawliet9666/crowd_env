@@ -144,13 +144,16 @@ class PPO:
             # We compute this outside the main training loop to avoid slowing down backprop.
             # Obs indices: 6 (rel_x), 7 (rel_y)
             with torch.no_grad():
-                rel_x = batch_obs[:, 6]
-                rel_y = batch_obs[:, 7]
-                dist_sq = rel_x**2 + rel_y**2
-                barrier = dist_sq - self.safe_dist**2
-                min_barrier = torch.min(barrier).item()
-                self.logger['barrier_min_batch'] = min_barrier
-                self.logger['barrier_avg_batch'] = torch.mean(barrier).item()
+                if str(self.obs_preprocess).lower() == "relative" and batch_obs.size(1) > 7:
+                    rel_x = batch_obs[:, 6]
+                    rel_y = batch_obs[:, 7]
+                    dist_sq = rel_x**2 + rel_y**2
+                    barrier = dist_sq - self.safe_dist**2
+                    self.logger['barrier_min_batch'] = torch.min(barrier).item()
+                    self.logger['barrier_avg_batch'] = torch.mean(barrier).item()
+                else:
+                    self.logger['barrier_min_batch'] = float("nan")
+                    self.logger['barrier_avg_batch'] = float("nan")
             # ---------------------------------------------
 
             # Calculate advantage using GAE
@@ -346,8 +349,8 @@ class PPO:
             
             while not done:
                 with torch.no_grad():
-                    obs_rel = absolute_obs_batch_to_relative(obs)
-                    obs_tensor = torch.tensor(obs_rel, dtype=torch.float).to(self.device).unsqueeze(0) # Add batch dim
+                    obs_proc = self._preprocess_obs(obs)
+                    obs_tensor = torch.tensor(obs_proc, dtype=torch.float).to(self.device).unsqueeze(0) # Add batch dim
                     # Use mean action directly (deterministic)
                     if hasattr(self, 'actor'):
                         action_tensor, _ = self._squash_action(self.actor(obs_tensor))
@@ -493,13 +496,13 @@ class PPO:
                 t += 1 # Increment timesteps ran this batch so far
 
                 # Track observations in this batch
-                obs_rel = absolute_obs_batch_to_relative(obs)
-                batch_obs.append(obs_rel)
+                obs_proc = self._preprocess_obs(obs)
+                batch_obs.append(obs_proc)
 
                 # Calculate action and make a step in the env. 
                 # Note that rew is short for reward.
                 action, log_prob = self.get_action(obs)
-                obs_tensor = torch.tensor(obs_rel, dtype=torch.float).to(self.device)
+                obs_tensor = torch.tensor(obs_proc, dtype=torch.float).to(self.device)
                 val = self.critic(obs_tensor)
 
                 obs, rew, terminated, truncated, infos = self.env.step(action)
@@ -552,8 +555,8 @@ class PPO:
                 log_prob - the log probability of the selected action in the distribution
         """
         # Query the actor network for a mean action
-        obs_rel = absolute_obs_batch_to_relative(obs)
-        obs = torch.tensor(obs_rel, dtype=torch.float).to(self.device)
+        obs_proc = self._preprocess_obs(obs)
+        obs = torch.tensor(obs_proc, dtype=torch.float).to(self.device)
         mean = self.actor(obs)  # latent mean (unbounded)
         dist = self._build_action_dist(mean)
 
@@ -573,6 +576,16 @@ class PPO:
 
         # Return the sampled action and the log probability of that action in our distribution
         return action.detach().cpu().numpy(), log_prob.detach().cpu().numpy()
+
+    def _preprocess_obs(self, obs):
+        mode = str(getattr(self, "obs_preprocess", "relative")).lower()
+        if mode == "relative":
+            return absolute_obs_batch_to_relative(obs)
+        if mode in ("polar", "none", "raw"):
+            return np.asarray(obs, dtype=np.float32)
+        raise ValueError(
+            f"Unknown obs_preprocess '{self.obs_preprocess}'. Expected one of: relative, polar, none."
+        )
 
     def evaluate(self, batch_obs, batch_acts):
         """
@@ -660,6 +673,7 @@ class PPO:
         self.save_freq = 0                  # Checkpoint interval in timesteps (0 means disabled)
         self.eval_freq_timesteps = 200000                # Eval cadence in timesteps
         self.eval_episodes = 50                          # Episodes per periodic evaluation
+        self.obs_preprocess = "relative"                 # relative | polar | none
 
         # Miscellaneous parameters
         self.render = False                             # If we should render during rollout

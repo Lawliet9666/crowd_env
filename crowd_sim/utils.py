@@ -2,6 +2,7 @@ import json
 import os
 
 import numpy as np
+from gymnasium import ObservationWrapper, spaces
 from config.config import Config
  
 
@@ -103,6 +104,99 @@ def absolute_obs_batch_to_relative(obs_batch):
     raise ValueError(f"Unsupported batch observation width for abs->rel conversion: {d}")
 
 
+def _wrap_angle(a: float) -> float:
+    return (a + np.pi) % (2.0 * np.pi) - np.pi
+
+
+def absolute_obs_to_polar(obs, topk: int = 5, farest_dist: float = 5.0):
+    """
+    Convert absolute-format observation to compact polar format.
+
+    Output layout:
+      [dist_to_goal, angle_to_goal, robot_speed,
+       (clearance, angle, rel_vel_radial, rel_vel_tangential) * topk]
+    """
+    x = np.asarray(obs, dtype=np.float32).reshape(-1)
+
+    if x.size < 8 or (x.size - 8) % 6 != 0:
+        return x
+
+    rx, ry, gx, gy, rvx, rvy, rtheta, rr = x[:8]
+    blocks = x[8:].reshape(-1, 6)
+
+    topk = int(topk)
+    farest_dist = float(farest_dist)
+    k = min(blocks.shape[0], topk)
+
+    to_goal = np.array([gx - rx, gy - ry], dtype=np.float32)
+    dist_to_goal = float(np.linalg.norm(to_goal))
+    if dist_to_goal > 1e-8:
+        goal_dir = np.arctan2(to_goal[1], to_goal[0])
+        angle_to_goal = _wrap_angle(float(goal_dir - rtheta))
+    else:
+        angle_to_goal = 0.0
+
+    robot_speed = float(np.linalg.norm([rvx, rvy]))
+    robot_block = np.array([dist_to_goal, angle_to_goal, robot_speed], dtype=np.float32)
+
+    cos_t, sin_t = np.cos(rtheta), np.sin(rtheta)
+    rot = np.array([[cos_t, sin_t], [-sin_t, cos_t]], dtype=np.float32)
+    out_blocks = np.full((topk, 4), [farest_dist, 0.0, 0.0, 0.0], dtype=np.float32)
+
+    for i in range(k):
+        hx, hy, hvx, hvy, hr, mask = blocks[i]
+        if mask < 0.5:
+            continue
+
+        rel_pos = np.array([hx - rx, hy - ry], dtype=np.float32)
+        dist_cc = float(np.linalg.norm(rel_pos))
+        clearance = min(dist_cc - rr - hr, farest_dist)
+        if dist_cc > 1e-8:
+            world_angle = np.arctan2(rel_pos[1], rel_pos[0])
+            angle = _wrap_angle(float(world_angle - rtheta))
+        else:
+            angle = 0.0
+
+        rel_vel = np.array([hvx - rvx, hvy - rvy], dtype=np.float32)
+        rel_vel_robot = rot @ rel_vel
+        out_blocks[i] = [clearance, angle, rel_vel_robot[0], rel_vel_robot[1]]
+
+    return np.concatenate([robot_block, out_blocks.reshape(-1)]).astype(np.float32)
+
+
+def absolute_obs_batch_to_polar(obs_batch, topk: int = 5, farest_dist: float = 5.0):
+    arr = np.asarray(obs_batch, dtype=np.float32)
+    if arr.ndim == 1:
+        return absolute_obs_to_polar(arr, topk=topk, farest_dist=farest_dist)
+    if arr.ndim != 2:
+        raise ValueError(f"Expected obs batch with ndim 1 or 2, got shape {arr.shape}")
+    return np.stack(
+        [absolute_obs_to_polar(row, topk=topk, farest_dist=farest_dist) for row in arr],
+        axis=0,
+    )
+
+
+class PolarObsWrapper(ObservationWrapper):
+    def __init__(self, env, topk: int = 5, farest_dist: float = 5.0):
+        super().__init__(env)
+        self.topk = int(topk)
+        self.farest_dist = float(farest_dist)
+        self.obs_dim = 3 + self.topk * 4
+        self.observation_space = spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(self.obs_dim,),
+            dtype=np.float32,
+        )
+
+    def observation(self, obs):
+        return absolute_obs_to_polar(
+            obs,
+            topk=self.topk,
+            farest_dist=self.farest_dist,
+        )
+
+
 def parse_obstacles(obs):
     """
     Parse obstacle blocks from observation.
@@ -161,15 +255,42 @@ def sample_point_in_disk(rng, center, radius, arena_size=None, max_tries=256):
     return np.clip(center, -arena_size, arena_size)
 
 
-def build_env(env_name: str, render_mode: str, config: Config):
+def build_env(
+    env_name: str,
+    render_mode: str,
+    config: Config,
+    obs_preprocess: str = "relative",
+    polar_topk: int = 5,
+    polar_farest_dist: float = 5.0,
+):
     from crowd_sim.env.social_nav import SocialNav
     from crowd_sim.env.social_nav_var_num import SocialNavVarNum
 
     if env_name == "social_nav":
-        return SocialNav(render_mode=render_mode, config_file=config)
-    if env_name == "social_nav_var_num":
-        return SocialNavVarNum(render_mode=render_mode, config_file=config)
-    raise ValueError(f"Unknown env: {env_name}")
+        env = SocialNav(render_mode=render_mode, config_file=config)
+    elif env_name == "social_nav_var_num":
+        env = SocialNavVarNum(render_mode=render_mode, config_file=config)
+    elif env_name in ("social_nav_var_num_polar", "social_nav_var_num_ploar"):
+        env = SocialNavVarNum(render_mode=render_mode, config_file=config)
+        obs_preprocess = "polar"
+    else:
+        raise ValueError(f"Unknown env: {env_name}")
+
+    mode = str(obs_preprocess).lower()
+    if mode == "polar":
+        env = PolarObsWrapper(
+            env,
+            topk=polar_topk,
+            farest_dist=polar_farest_dist,
+        )
+    elif mode in ("relative", "none", "raw"):
+        pass
+    else:
+        raise ValueError(
+            f"Unknown obs_preprocess '{obs_preprocess}'. Expected one of: relative, polar, none."
+        )
+
+    return env
 
 def to_jsonable(obj):
     if isinstance(obj, np.ndarray):

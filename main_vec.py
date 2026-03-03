@@ -28,11 +28,19 @@ ALGO_TO_MODEL = {
 }
 
 
-def make_env_fn(config, env_name):
+def make_env_fn(config, env_name, env_kwargs):
     def _init():
-        return build_env(env_name, render_mode=None, config=config)
+        return build_env(env_name, render_mode=None, config=config, **env_kwargs)
 
     return _init
+
+
+def build_env_kwargs(args):
+    return {
+        "obs_preprocess": args.obs_preprocess,
+        "polar_topk": args.polar_topk,
+        "polar_farest_dist": args.polar_farest_dist,
+    }
 
 
 def set_global_seeds(seed):
@@ -144,6 +152,7 @@ def build_ppo_hyperparameters(args, base_hyperparameters, config):
             "eval_episodes": args.ppo_eval_episodes,
             "alpha": config.controller_params["cbf_alpha"],
             "beta": config.controller_params["cvar_beta"],
+            "obs_preprocess": args.obs_preprocess,
         }
     )
     return hyperparameters
@@ -221,6 +230,7 @@ def test(env, actor_model, device, method, hyperparameters, algo):
         save_path=save_path,
         base_seed=eval_seed,
         method=method,
+        obs_preprocess=hyperparameters.get("obs_preprocess", "relative"),
         visualize_episodes=hyperparameters["test_viz_ep"],
     )
     # run_crossing_scenario(actor, env, save_path=save_path)
@@ -247,6 +257,7 @@ def main(args):
 
     config = Config()
     env_name = config.env.get("name", "social_nav_var_num")
+    env_kwargs = build_env_kwargs(args)
 
     now = datetime.now()
     timestamp = now.strftime("%Y%m%d_%H%M%S")
@@ -284,16 +295,17 @@ def main(args):
         print(f"Models will be saved to: {save_dir}", flush=True)
         wandb.init(project=f"rl_adaptive_cvar_cbf_{args.algo}", name=exp_name, config=hyperparameters)
 
-        num_envs = max(1, multiprocessing.cpu_count())
-        env_fns = [make_env_fn(config, env_name) for _ in range(num_envs)]
+        num_envs = int(args.num_envs) if int(args.num_envs) > 0 else max(1, multiprocessing.cpu_count())
+        print(f"Requested num_envs={args.num_envs}; using num_envs={num_envs}", flush=True)
+        env_fns = [make_env_fn(config, env_name, env_kwargs) for _ in range(num_envs)]
         vec_env = AsyncVectorEnv(env_fns)
         model_hyperparameters = dict(hyperparameters)
         eval_env = None
         if args.algo == "sac" and args.sac_eval_freq_episodes > 0 and args.sac_eval_episodes > 0:
-            eval_env = build_env(env_name, render_mode=None, config=config)
+            eval_env = build_env(env_name, render_mode=None, config=config, **env_kwargs)
             model_hyperparameters["eval_env"] = eval_env
         if args.algo == "ppo" and args.ppo_eval_freq_timesteps > 0 and args.ppo_eval_episodes > 0:
-            eval_env = build_env(env_name, render_mode=None, config=config)
+            eval_env = build_env(env_name, render_mode=None, config=config, **env_kwargs)
             model_hyperparameters["eval_env"] = eval_env
         try:
             train(
@@ -325,7 +337,7 @@ def main(args):
             extra={"eval_seed": args.eval_seed, "method": args.method, "algo": args.algo},
         )
 
-        env = build_env(env_name, render_mode="rgb_array", config=config)
+        env = build_env(env_name, render_mode="rgb_array", config=config, **env_kwargs)
         test(
             env=env,
             actor_model=actor_model,
