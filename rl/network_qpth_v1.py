@@ -12,6 +12,7 @@ class BarrierNet(nn.Module):
                  obs_dim,
                  act_dim,
                  qp_obs_dim,
+                 qp_start_timesteps=0,
                  nHidden1 = 256, 
                  nHidden21 = 256, 
                  nHidden22 = 256, 
@@ -34,6 +35,8 @@ class BarrierNet(nn.Module):
         self.alpha = alpha
         self.actor_obs_dim = int(obs_dim)
         self.qp_obs_dim = int(qp_obs_dim)
+        self.qp_start_timesteps = max(0, int(qp_start_timesteps))
+        self.current_timestep = 0
         if self.qp_obs_dim <= 6 or (self.qp_obs_dim - 6) % 6 != 0:
             raise ValueError(
                 f"BarrierNet(v1) invalid qp_obs_dim={self.qp_obs_dim}. Expected 6 + 6*K with K>=1."
@@ -59,7 +62,7 @@ class BarrierNet(nn.Module):
             self._cbf_name = "unknown"
 
         print(
-            f"[CBFNet] robot_type={self.robot_type}, safe_dist={self.safe_dist:.3f}, umax={self.u_max}, obs_topk={self.obs_topk}, actor_input=polar",
+            f"[CBFNet] robot_type={self.robot_type}, safe_dist={self.safe_dist:.3f}, umax={self.u_max}, obs_topk={self.obs_topk}, actor_input=polar, qp_start_timesteps={self.qp_start_timesteps}",
             flush=True,
         )
         self._qp_warm_start = None
@@ -70,6 +73,9 @@ class BarrierNet(nn.Module):
         self.fc22 = nn.Linear(nHidden1, nHidden22) 
         self.fc31 = nn.Linear(nHidden21, self.nCls) 
         self.fc32 = nn.Linear(nHidden22, 1) 
+
+    def set_timestep(self, timestep):
+        self.current_timestep = max(0, int(timestep))
 
     def forward(self, obs_actor, obs_qp=None):
         if isinstance(obs_actor, np.ndarray):
@@ -109,6 +115,10 @@ class BarrierNet(nn.Module):
         # x32 = 4*nn.Sigmoid()(x32)  # ensure CBF parameters are positive
         alpha = 4*torch.sigmoid(self.fc32(x22)).squeeze(-1)  # (B,)
         self.last_alpha = alpha
+
+        # Warmup phase: bypass QP during training.
+        if self.training and int(self.current_timestep) < int(self.qp_start_timesteps):
+            return unom
 
         # BarrierNet dispatch based on robot type
         if self.robot_type == 'single_integrator':

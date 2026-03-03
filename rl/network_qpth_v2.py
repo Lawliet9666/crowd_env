@@ -71,6 +71,10 @@ class BarrierNet(BarrierNetV1):
         alpha = self.alpha_max * torch.sigmoid(self.alpha_out(xa)).squeeze(-1)
         self.last_alpha = alpha
 
+        # Warmup phase: bypass QP during training.
+        if self.training and int(self.current_timestep) < int(self.qp_start_timesteps):
+            return unom
+
         if self.robot_type == "single_integrator":
             return self.dCBF_SI(obs_qp, unom, alpha)
         if self.robot_type == "unicycle":

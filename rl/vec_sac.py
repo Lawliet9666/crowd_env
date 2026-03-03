@@ -85,6 +85,7 @@ class VecSAC(SAC):
         env_steps_collected = 0
 
         while completed_steps < self.timesteps_per_batch:
+            self._set_actor_timestep(self._env_steps_total)
             if self._env_steps_total < self.start_timesteps:
                 actions = np.stack(
                     [self.env.single_action_space.sample() for _ in range(self.num_envs)], axis=0

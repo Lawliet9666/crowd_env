@@ -101,6 +101,7 @@ def build_base_hyperparameters(args, config, env_name, save_dir, device, needs_q
         "omega_max": config.robot_params["omega_max"],
         "obs_topk": args.obs_topk,
         "obs_farest_dist": args.obs_farest_dist,
+        "qp_start_timesteps": args.qp_start_timesteps,
         "needs_qp_relative": bool(needs_qp_relative),
     }
 

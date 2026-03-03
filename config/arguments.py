@@ -39,6 +39,12 @@ def get_args():
 		default=5.0,
 		help='Distance cap/padding value for polar observation preprocessing'
 	)
+	parser.add_argument(
+		'--qp_start_timesteps',
+		type=int,
+		default=0,
+		help='Warmup timesteps before enabling QP/optimization layer (0 = enable from start)'
+	)
 
 	# -------------------------------------------------------------------------
 	# COMMON optimization/logging arguments (shared by SAC and PPO)

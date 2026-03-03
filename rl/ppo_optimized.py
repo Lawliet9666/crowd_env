@@ -84,6 +84,7 @@ class PPO:
         )
         if self.use_dual_actor_input:
             actor_kwargs["qp_obs_dim"] = int(self.qp_obs_dim)
+            actor_kwargs["qp_start_timesteps"] = int(self.qp_start_timesteps)
         actor_kwargs.update(getattr(self, "policy_kwargs", {}))
 
         self.actor = policy_class(self.actor_obs_dim, self.act_dim, **actor_kwargs).to(self.device)
@@ -140,6 +141,7 @@ class PPO:
         t_so_far = 0 # Timesteps simulated so far
         i_so_far = 0 # Iterations ran so far
         while t_so_far < total_timesteps:                                                                       # ALG STEP 2
+            self._set_actor_timestep(t_so_far)
             # Autobots, roll out (just kidding, we're collecting our batch simulations here)
             batch_obs, batch_acts, batch_log_probs, batch_rews, batch_lens, batch_vals, batch_dones = self.rollout()                     # ALG STEP 3
             batch_obs_qp = self._last_batch_obs_qp
@@ -346,9 +348,14 @@ class PPO:
             # Print a summary of our training so far
             self._log_summary()
 
+    def _set_actor_timestep(self, timestep):
+        if hasattr(self, "actor") and hasattr(self.actor, "set_timestep"):
+            self.actor.set_timestep(int(timestep))
+
 
     def evaluate_policy_internal(self, K, step): # TODO: multiple seeds evlauation
         print(f"DEBUG: Evaluating policy at step {step}...", flush=True)
+        self._set_actor_timestep(step)
         ret_list = []
         len_list = []
         success_count = 0
@@ -726,6 +733,7 @@ class PPO:
         self.obs_topk = 5                                # top-k obstacles used by preprocessing
         self.obs_farest_dist = 5.0                       # distance cap/padding for polar preprocessing
         self.needs_qp_relative = False                   # if True, also provide relative obs to QP layer
+        self.qp_start_timesteps = 0                      # warmup before enabling QP layer
 
         # Miscellaneous parameters
         self.render = False                             # If we should render during rollout

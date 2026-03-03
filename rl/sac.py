@@ -233,6 +233,7 @@ class SAC:
 
         while t_so_far < total_timesteps:
             t_so_far += 1
+            self._set_actor_timestep(t_so_far)
             if self.render and (self.logger["i_so_far"] % max(1, self.render_every_i) == 0):
                 self.env.render()
 
@@ -264,6 +265,7 @@ class SAC:
                 self.logger["barrier_vals"].append(float(barrier_val))
 
             if self.replay_buffer.len >= self.batch_size:
+                self._set_actor_timestep(t_so_far)
                 for _ in range(self.updates_per_step):
                     stats = self._update_step()
                     self._accumulate_update_stats(stats)
@@ -542,6 +544,7 @@ class SAC:
     def _evaluate_policy_internal(self, step):
         if self.eval_env is None:
             return
+        self._set_actor_timestep(step)
         episodes = int(self.eval_episodes)
         if episodes <= 0:
             return
@@ -651,6 +654,7 @@ class SAC:
             "amax": self.amax,
             "omega_max": self.omega_max,
             "qp_obs_dim": int(self.qp_obs_dim),
+            "qp_start_timesteps": int(self.qp_start_timesteps),
         }
         actor_kwargs.update(getattr(self, "policy_kwargs", {}))
 
@@ -703,6 +707,10 @@ class SAC:
         obs_actor, _ = self._preprocess_obs_pair(obs)
         return obs_actor
 
+    def _set_actor_timestep(self, timestep):
+        if hasattr(self, "actor") and hasattr(self.actor, "set_timestep"):
+            self.actor.set_timestep(int(timestep))
+
     def _preprocess_obs_pair(self, obs):
         obs_polar = absolute_obs_batch_to_polar(
             obs,
@@ -754,6 +762,7 @@ class SAC:
         self.obs_topk = 5
         self.obs_farest_dist = 5.0
         self.needs_qp_relative = False
+        self.qp_start_timesteps = 0
 
         self.safe_dist = 0.8
         self.cbf_alpha = 2.0

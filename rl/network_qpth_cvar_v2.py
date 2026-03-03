@@ -26,6 +26,7 @@ class BarrierNet(nn.Module):
     def __init__(self, obs_dim,
                  act_dim,
                  qp_obs_dim,
+                 qp_start_timesteps=0,
                  nHidden1 = 256, 
                  nHidden21 = 256, 
                  nHidden22 = 256, 
@@ -43,6 +44,8 @@ class BarrierNet(nn.Module):
         self.robot_type = robot_type
         self.actor_obs_dim = int(obs_dim)
         self.qp_obs_dim = int(qp_obs_dim)
+        self.qp_start_timesteps = max(0, int(qp_start_timesteps))
+        self.current_timestep = 0
         if self.qp_obs_dim <= 6 or (self.qp_obs_dim - 6) % 6 != 0:
             raise ValueError(
                 f"CVaR-BarrierNet(v2) invalid qp_obs_dim={self.qp_obs_dim}. Expected 6 + 6*K with K>=1."
@@ -71,7 +74,7 @@ class BarrierNet(nn.Module):
             self._cbf_name = "unknown"
 
         print(
-            f"[CVaRNet v2] robot_type={self.robot_type}, safe_dist={self.safe_dist:.3f}, umax={self.u_max}, obs_topk={self.obs_topk}, actor_input=polar",
+            f"[CVaRNet v2] robot_type={self.robot_type}, safe_dist={self.safe_dist:.3f}, umax={self.u_max}, obs_topk={self.obs_topk}, actor_input=polar, qp_start_timesteps={self.qp_start_timesteps}",
             flush=True,
         )
         self.predictor = TrajPredictor(
@@ -87,6 +90,9 @@ class BarrierNet(nn.Module):
         self.fc31 = nn.Linear(nHidden21, self.nCls) 
         self.fc32 = nn.Linear(nHidden22, 1) 
         self.fc33 = nn.Linear(nHidden22, 1)  # for radius
+
+    def set_timestep(self, timestep):
+        self.current_timestep = max(0, int(timestep))
 
     def _extract_obstacle_blocks(self, obs):
         """
@@ -163,6 +169,10 @@ class BarrierNet(nn.Module):
         r_scale = 1.0 + 1.5*torch.sigmoid(self.fc33(x23)).squeeze(-1) # (B,) in [0, 2]
         r_safe_learned = self.safe_dist * r_scale
         self.last_r_safe = r_safe_learned
+
+        # Warmup phase: bypass QP during training.
+        if self.training and int(self.current_timestep) < int(self.qp_start_timesteps):
+            return u_nom
 
         if self.robot_type == 'single_integrator':
             u_safe = self.dCVaR_CBF_SI(obs_qp, u_nom, beta, r_safe_learned)
