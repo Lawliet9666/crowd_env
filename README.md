@@ -32,7 +32,8 @@ Use large batch_size (i.e rollout 8196) and large minibatch_size (e.g., 256)
 
 ### Best practice for SAC
 
-Set small alpha (e.g., 0.001 or auto), batch size 128-256, do not use larger batch size.
+Set small alpha (e.g., 0.001 or auto), batch size 128-256.   
+Do not use larger batch size. Do not use the init_weight as in PPO.   
 
 | Total Steps | Batch size | alpha | best success| 
 |:-:|:-:|:-:|:-:|
