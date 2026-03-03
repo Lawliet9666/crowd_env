@@ -42,8 +42,8 @@ A good config example is `runs/SACabl-crowdsim-silu-env8-sac_base-bs128-a0.001-a
 
 | Total Steps | Batch size | alpha | activation |best success| 
 |:-:|:-:|:-:|:-:|:-:|
-| 1M | 256 | auto |relu| 61 % | 
-| 1M | 256 | 0.001 |relu| 57 % |
+| 1M | 256 | auto |relu| 61% | 
+| 1M | 256 | 0.001 |relu| 57% |
 | 2M | 256 | auto |relu| 77% | 
 | 2M | 256 | 0.001 |relu| 79% | 
 | 2M | 256 | 0.001 |silu|  84% | 
