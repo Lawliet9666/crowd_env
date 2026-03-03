@@ -96,7 +96,15 @@ class SAC:
             act_space = env.action_space
 
         env_obs_dim = int(np.prod(obs_space.shape))
-        self.obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim))
+        mode = str(getattr(self, "obs_preprocess", "relative")).lower()
+        if mode == "relative":
+            self.obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim))
+        elif mode in ("polar", "none", "raw"):
+            self.obs_dim = int(env_obs_dim)
+        else:
+            raise ValueError(
+                f"Unknown obs_preprocess '{self.obs_preprocess}'. Expected one of: relative, polar, none."
+            )
         self.act_dim = int(np.prod(act_space.shape))
         self.action_low = np.asarray(act_space.low, dtype=np.float32).reshape(-1)
         self.action_high = np.asarray(act_space.high, dtype=np.float32).reshape(-1)
@@ -625,6 +633,8 @@ class SAC:
         return torch.tensor(self.alpha_value, dtype=torch.float32, device=self.device)
 
     def _barrier_from_obs(self, obs):
+        if str(getattr(self, "obs_preprocess", "relative")).lower() != "relative":
+            return np.nan
         # Observation layout (first obstacle block): idx 6 rel_x, idx 7 rel_y, idx 11 mask.
         obs_arr = np.asarray(obs, dtype=np.float32).reshape(-1)
         if obs_arr.shape[0] >= 12 and obs_arr[11] > 0.5:
@@ -633,9 +643,15 @@ class SAC:
             return rel_x * rel_x + rel_y * rel_y - float(self.safe_dist) ** 2
         return np.nan
 
-    @staticmethod
-    def _to_policy_obs(obs):
-        return absolute_obs_batch_to_relative(obs)
+    def _to_policy_obs(self, obs):
+        mode = str(getattr(self, "obs_preprocess", "relative")).lower()
+        if mode == "relative":
+            return absolute_obs_batch_to_relative(obs)
+        if mode in ("polar", "none", "raw"):
+            return np.asarray(obs, dtype=np.float32)
+        raise ValueError(
+            f"Unknown obs_preprocess '{self.obs_preprocess}'. Expected one of: relative, polar, none."
+        )
 
     def _init_hyperparameters(self, hyperparameters):
         self.timesteps_per_batch = 2_000
@@ -671,6 +687,7 @@ class SAC:
         self.eval_freq_episodes = 0
         self.eval_episodes = 20
         self.device = torch.device("cpu")
+        self.obs_preprocess = "relative"
 
         self.safe_dist = 0.8
         self.cbf_alpha = 2.0

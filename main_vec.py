@@ -130,6 +130,7 @@ def build_sac_hyperparameters(args, base_hyperparameters, config):
             "eval_episodes": args.sac_eval_episodes,
             "cbf_alpha": config.controller_params["cbf_alpha"],
             "cvar_beta": config.controller_params["cvar_beta"],
+            "obs_preprocess": args.obs_preprocess,
         }
     )
     return hyperparameters
