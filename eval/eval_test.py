@@ -111,17 +111,6 @@ def run_policy_test(
         )
 
 
-def _resolve_bool_or_auto(text, *, default):
-    val = str(text).strip().lower()
-    if val == "auto":
-        return bool(default)
-    if val in ("1", "true", "t", "yes", "y", "on"):
-        return True
-    if val in ("0", "false", "f", "no", "n", "off"):
-        return False
-    raise ValueError(f"Invalid boolean option '{text}'. Use one of: auto, true, false")
-
-
 def _build_policy_kwargs_from_config(cfg, method):
     gmm_cfg = dict(cfg.human.get("gmm", {}))
     kwargs = {
@@ -166,8 +155,7 @@ def main(args):
                 f"Unsupported method '{args.method}'. "
                 "Expected one of: rl, rlcbfgamma, rlcbfgamma_2nets, rlcvarbetaradius, rlcvarbetaradius_2nets."
             )
-        needs_default = METHOD_NEEDS_QP_RELATIVE.get(method_key, False)
-        needs_qp_relative = _resolve_bool_or_auto(args.needs_qp_relative, default=needs_default)
+        needs_qp_relative = bool(METHOD_NEEDS_QP_RELATIVE.get(method_key, False))
         test_mode = str(args.test_mode).strip().lower()
         if test_mode not in ("eval", "crossing", "both"):
             raise ValueError(

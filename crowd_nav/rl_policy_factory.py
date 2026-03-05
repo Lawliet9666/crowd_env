@@ -24,8 +24,3 @@ def get_rl_policy_class(method: str):
     if method in ("orca", "social_force"):
         raise ValueError(f"method '{method}' is supported in main_opt.py, not main_vec.py")
     raise ValueError(f"Unknown method {method}")
-
-
-def get_policy_class(method: str):
-    """Backward-compatible alias."""
-    return get_rl_policy_class(method)

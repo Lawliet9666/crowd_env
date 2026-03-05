@@ -22,13 +22,66 @@ if str(ROOT_DIR) not in sys.path:
 from config.config import Config
 from crowd_sim.utils import (
     build_env,
-    relative_obs_dim_from_env_dim,
     dump_test_config,
 )
 from eval.eval_util import RLEvalActorAdapter, run_one_episode, resolve_episode_seed
 
 FIXED_EVAL_SEEDS = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 EVAL_SUMMARY_FILENAME = "checkpoint_eval_all_multiseed.json"
+DEFAULT_OBS_FAREST_DIST = 5.0
+
+METHOD_NEEDS_QP_RELATIVE = {
+    "rlcbfgamma": True,
+    "rlcbfgamma_2nets": True,
+    "rlcvarbetaradius": True,
+    "rlcvarbetaradius_2nets": True,
+}
+
+
+def _resolve_needs_qp_relative(method: str) -> bool:
+    return bool(METHOD_NEEDS_QP_RELATIVE.get(str(method).strip().lower(), False))
+
+
+def _extract_actor_obs_dim_from_state_dict(state: Dict[str, Any]) -> int:
+    if not isinstance(state, dict):
+        raise TypeError(f"Expected checkpoint state_dict as dict, got {type(state).__name__}")
+
+    candidates = (
+        "fc1.weight",
+        "module.fc1.weight",
+        "actor.fc1.weight",
+        "module.actor.fc1.weight",
+    )
+    weight = None
+    for key in candidates:
+        if key in state:
+            weight = state[key]
+            break
+    if weight is None:
+        for key, value in state.items():
+            if not key.endswith(".fc1.weight"):
+                continue
+            if "alpha_fc1" in key:
+                continue
+            weight = value
+            break
+    if weight is None:
+        raise KeyError("Could not find actor fc1.weight in checkpoint state_dict.")
+    if not torch.is_tensor(weight) or weight.ndim != 2:
+        raise ValueError("Invalid actor fc1.weight in checkpoint state_dict.")
+    return int(weight.shape[1])
+
+
+def _infer_obs_topk_from_actor_dim(actor_obs_dim: int) -> int:
+    d = int(actor_obs_dim)
+    if d >= 3 and (d - 3) % 4 == 0:
+        k = (d - 3) // 4
+        if k > 0:
+            return int(k)
+    raise ValueError(
+        f"Checkpoint actor obs_dim={d} is not polar-format (expected 3 + 4*K). "
+        "Relative-format RL checkpoints are not supported by eval_batch."
+    )
 
 
 def _extract_step(path: str) -> int:
@@ -78,7 +131,16 @@ def discover_checkpoints(run_dir: str) -> List[Dict[str, Any]]:
     return entries
 
 
-def evaluate_actor(actor, env, episodes: int, base_seed: Optional[int]) -> Dict[str, Any]:
+def evaluate_actor(
+    actor,
+    env,
+    episodes: int,
+    base_seed: Optional[int],
+    *,
+    obs_topk: int,
+    obs_farest_dist: float,
+    needs_qp_relative: bool,
+) -> Dict[str, Any]:
     returns = []
     lens = []
     success_hits = 0
@@ -95,6 +157,9 @@ def evaluate_actor(actor, env, episodes: int, base_seed: Optional[int]) -> Dict[
             track_signals=False,
             unom_holder=None,
             collect_frames=False,
+            obs_topk=int(obs_topk),
+            obs_farest_dist=float(obs_farest_dist),
+            needs_qp_relative=bool(needs_qp_relative),
         )
 
         returns.append(float(result["ep_ret"]))
@@ -120,11 +185,28 @@ def evaluate_actor(actor, env, episodes: int, base_seed: Optional[int]) -> Dict[
     }
 
 
-def _evaluate_over_seeds(actor, env, eval_seeds, episodes_per_seed: int):
+def _evaluate_over_seeds(
+    actor,
+    env,
+    eval_seeds,
+    episodes_per_seed: int,
+    *,
+    obs_topk: int,
+    obs_farest_dist: float,
+    needs_qp_relative: bool,
+):
     per_seed = []
     per_seed_full = []
     for s_idx, seed in enumerate(eval_seeds):
-        metrics = evaluate_actor(actor, env, episodes=episodes_per_seed, base_seed=seed)
+        metrics = evaluate_actor(
+            actor,
+            env,
+            episodes=episodes_per_seed,
+            base_seed=seed,
+            obs_topk=obs_topk,
+            obs_farest_dist=obs_farest_dist,
+            needs_qp_relative=needs_qp_relative,
+        )
         row_seed = {
             "success_rate": metrics["success_rate"],
             "collision_rate": metrics["collision_rate"],
@@ -145,9 +227,9 @@ def _evaluate_over_seeds(actor, env, eval_seeds, episodes_per_seed: int):
     return per_seed, agg
 
 
-def _policy_kwargs_from_config(cfg: Config) -> Dict[str, Any]:
+def _policy_kwargs_from_config(cfg: Config, method: str, *, qp_obs_dim: Optional[int]) -> Dict[str, Any]:
     safe_dist = cfg.controller.safety_margin + cfg.human.radius + cfg.robot.radius
-    return {
+    kwargs = {
         "robot_type": cfg.robot.type,
         "safe_dist": safe_dist,
         "alpha": cfg.controller.cbf_alpha,
@@ -156,6 +238,15 @@ def _policy_kwargs_from_config(cfg: Config) -> Dict[str, Any]:
         "amax": cfg.robot.amax,
         "omega_max": cfg.robot.omega_max,
     }
+    method_key = str(method).strip().lower()
+    if method_key in ("rlcvarbetaradius", "rlcvarbetaradius_2nets"):
+        gmm_cfg = dict(cfg.human.get("gmm", {}))
+        kwargs["gmm_weights"] = gmm_cfg.get("weights")
+        kwargs["gmm_stds"] = gmm_cfg.get("stds")
+        kwargs["gmm_lateral_ratio"] = gmm_cfg.get("lateral_ratio", 0.3)
+    if qp_obs_dim is not None:
+        kwargs["qp_obs_dim"] = int(qp_obs_dim)
+    return kwargs
 
 
 def _summarize_metric(values: List[float]) -> Dict[str, float]:
@@ -365,9 +456,8 @@ def main():
             from crowd_nav.rl_policy_factory import get_rl_policy_class
 
             PolicyClass = get_rl_policy_class(method)
-            obs_dim = relative_obs_dim_from_env_dim(env.observation_space.shape[0])
             act_dim = env.action_space.shape[0]
-            policy_kwargs = _policy_kwargs_from_config(cfg)
+            needs_qp_relative = _resolve_needs_qp_relative(method)
 
             for ckpt_idx, ckpt in enumerate(checkpoints):
                 ckpt_path = ckpt["path"]
@@ -383,8 +473,14 @@ def main():
                     "step": step,
                 }
 
-                policy = PolicyClass(obs_dim, act_dim, **policy_kwargs).to(device)
                 state = torch.load(ckpt_path, map_location=device)
+                if isinstance(state, dict) and isinstance(state.get("state_dict"), dict):
+                    state = state["state_dict"]
+                actor_obs_dim = _extract_actor_obs_dim_from_state_dict(state)
+                obs_topk = _infer_obs_topk_from_actor_dim(actor_obs_dim)
+                qp_obs_dim = (6 + 6 * int(obs_topk)) if needs_qp_relative else None
+                policy_kwargs = _policy_kwargs_from_config(cfg, method, qp_obs_dim=qp_obs_dim)
+                policy = PolicyClass(actor_obs_dim, act_dim, **policy_kwargs).to(device)
                 policy.load_state_dict(state)
                 policy.eval()
                 actor = RLEvalActorAdapter(policy, env.action_space, device)
@@ -394,10 +490,15 @@ def main():
                     env=env,
                     eval_seeds=eval_seeds,
                     episodes_per_seed=args.episodes_per_seed,
+                    obs_topk=obs_topk,
+                    obs_farest_dist=DEFAULT_OBS_FAREST_DIST,
+                    needs_qp_relative=needs_qp_relative,
                 )
                 row["totals"] = agg["totals"]
                 row["aggregate"] = agg["aggregate"]
                 row["per_seed"] = per_seed
+                row["obs_topk"] = int(obs_topk)
+                row["needs_qp_relative"] = bool(needs_qp_relative)
 
                 print(
                     "  aggregate: "
@@ -422,6 +523,9 @@ def main():
                 env=env,
                 eval_seeds=eval_seeds,
                 episodes_per_seed=args.episodes_per_seed,
+                obs_topk=5,
+                obs_farest_dist=DEFAULT_OBS_FAREST_DIST,
+                needs_qp_relative=False,
             )
             row["totals"] = agg["totals"]
             row["aggregate"] = agg["aggregate"]

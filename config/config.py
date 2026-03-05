@@ -127,14 +127,3 @@ class Config:
             self.reward.back_factor = 0.0
             self.reward.spin_factor = 0.0
         self.reward.constant_penalty = -0.025
-
-        # Deprecated: PPO hyperparameters are provided via CLI args (see config/arguments.py).
-        # Keep this object for backward compatibility only.
-        self.hyperparameters = BaseConfig()
-
-        # Backwards-compatible aliases
-        self.env_params = self.env
-        self.human_params = self.human
-        self.robot_params = self.robot
-        self.controller_params = self.controller
-        self.reward_params = self.reward

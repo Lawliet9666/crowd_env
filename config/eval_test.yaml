@@ -7,7 +7,6 @@ defaults:
 actor_model: ???
 algo: ""
 env_name: ""
-needs_qp_relative: auto
 test_mode: both
 test_ep: 100
 test_viz_ep: 50

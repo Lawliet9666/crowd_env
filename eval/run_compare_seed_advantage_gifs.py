@@ -31,7 +31,7 @@ if str(ROOT_DIR) not in sys.path:
 from config.config import Config
 from controller.robot_controller_factory import build_robot_controller
 from crowd_nav.rl_policy_factory import get_rl_policy_class
-from crowd_sim.utils import build_env, relative_obs_dim_from_env_dim
+from crowd_sim.utils import build_env
 from eval.eval_util import RLEvalActorAdapter, run_one_episode
 
 
@@ -47,6 +47,61 @@ DEFAULT_METHOD_ORDER = [
 ]
 DEFAULT_FPS = 10
 SEED_WINDOW = 100
+DEFAULT_OBS_TOPK = 5
+DEFAULT_OBS_FAREST_DIST = 5.0
+
+METHOD_NEEDS_QP_RELATIVE = {
+    "rlcbfgamma": True,
+    "rlcbfgamma_2nets": True,
+    "rlcvarbetaradius": True,
+    "rlcvarbetaradius_2nets": True,
+}
+
+
+def _resolve_needs_qp_relative(method: str) -> bool:
+    return bool(METHOD_NEEDS_QP_RELATIVE.get(str(method).strip().lower(), False))
+
+
+def _extract_actor_obs_dim_from_state_dict(state: Dict[str, Any]) -> int:
+    if not isinstance(state, dict):
+        raise TypeError(f"Expected checkpoint state_dict as dict, got {type(state).__name__}")
+
+    candidates = (
+        "fc1.weight",
+        "module.fc1.weight",
+        "actor.fc1.weight",
+        "module.actor.fc1.weight",
+    )
+    weight = None
+    for key in candidates:
+        if key in state:
+            weight = state[key]
+            break
+    if weight is None:
+        for key, value in state.items():
+            if not key.endswith(".fc1.weight"):
+                continue
+            if "alpha_fc1" in key:
+                continue
+            weight = value
+            break
+    if weight is None:
+        raise KeyError("Could not find actor fc1.weight in checkpoint state_dict.")
+    if not torch.is_tensor(weight) or weight.ndim != 2:
+        raise ValueError("Invalid actor fc1.weight in checkpoint state_dict.")
+    return int(weight.shape[1])
+
+
+def _infer_obs_topk_from_actor_dim(actor_obs_dim: int) -> int:
+    d = int(actor_obs_dim)
+    if d >= 3 and (d - 3) % 4 == 0:
+        k = (d - 3) // 4
+        if k > 0:
+            return int(k)
+    raise ValueError(
+        f"Checkpoint actor obs_dim={d} is not polar-format (expected 3 + 4*K). "
+        "Relative-format RL checkpoints are not supported by run_compare_seed_advantage_gifs."
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -228,19 +283,28 @@ def _policy_kwargs(cfg: Config) -> Dict[str, Any]:
     }
 
 
+def _policy_kwargs_for_method(cfg: Config, method: str, *, qp_obs_dim: Optional[int]) -> Dict[str, Any]:
+    kwargs = _policy_kwargs(cfg)
+    method_key = str(method).strip().lower()
+    if method_key in ("rlcvarbetaradius", "rlcvarbetaradius_2nets"):
+        gmm_cfg = dict(cfg.human.get("gmm", {}))
+        kwargs["gmm_weights"] = gmm_cfg.get("weights")
+        kwargs["gmm_stds"] = gmm_cfg.get("stds")
+        kwargs["gmm_lateral_ratio"] = gmm_cfg.get("lateral_ratio", 0.3)
+    if qp_obs_dim is not None:
+        kwargs["qp_obs_dim"] = int(qp_obs_dim)
+    return kwargs
+
+
 def build_actor_for_method(
     method: str,
     method_dir: Path,
     cfg: Config,
     env,
     device: torch.device,
-) -> Tuple[Any, Optional[Path]]:
+) -> Tuple[Any, Optional[Path], int, bool]:
     if _is_rl_method(method):
         PolicyClass = get_rl_policy_class(method)
-        obs_dim = relative_obs_dim_from_env_dim(env.observation_space.shape[0])
-        act_dim = env.action_space.shape[0]
-        policy = PolicyClass(obs_dim, act_dim, **_policy_kwargs(cfg)).to(device)
-
         ckpt_path = resolve_actor_checkpoint(method_dir)
         if ckpt_path is None:
             raise FileNotFoundError(f"No actor checkpoint found under {method_dir}")
@@ -248,13 +312,20 @@ def build_actor_for_method(
         state = torch.load(str(ckpt_path), map_location=device)
         if isinstance(state, dict) and isinstance(state.get("state_dict"), dict):
             state = state["state_dict"]
+        actor_obs_dim = _extract_actor_obs_dim_from_state_dict(state)
+        obs_topk = _infer_obs_topk_from_actor_dim(actor_obs_dim)
+        needs_qp_relative = _resolve_needs_qp_relative(method)
+        qp_obs_dim = (6 + 6 * int(obs_topk)) if needs_qp_relative else None
+        act_dim = env.action_space.shape[0]
+        policy_kwargs = _policy_kwargs_for_method(cfg, method, qp_obs_dim=qp_obs_dim)
+        policy = PolicyClass(actor_obs_dim, act_dim, **policy_kwargs).to(device)
         policy.load_state_dict(state, strict=True)
         policy.eval()
         actor = RLEvalActorAdapter(policy, env.action_space, device)
-        return actor, ckpt_path
+        return actor, ckpt_path, int(obs_topk), bool(needs_qp_relative)
 
     actor = build_robot_controller(method, cfg, env)
-    return actor, None
+    return actor, None, int(DEFAULT_OBS_TOPK), False
 
 
 def evaluate_one_method(
@@ -274,7 +345,7 @@ def evaluate_one_method(
 
     checkpoint_path: Optional[Path] = None
     try:
-        actor, checkpoint_path = build_actor_for_method(
+        actor, checkpoint_path, obs_topk, needs_qp_relative = build_actor_for_method(
             method=method,
             method_dir=scenario_dir / method,
             cfg=cfg,
@@ -289,6 +360,9 @@ def evaluate_one_method(
             track_signals=False,
             unom_holder=None,
             collect_frames=collect_frames,
+            obs_topk=int(obs_topk),
+            obs_farest_dist=float(DEFAULT_OBS_FAREST_DIST),
+            needs_qp_relative=bool(needs_qp_relative),
         )
 
         success = bool(ep["ep_success"]) and (not bool(ep["ep_collision"]))
