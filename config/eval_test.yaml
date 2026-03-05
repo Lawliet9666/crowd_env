@@ -6,14 +6,12 @@ defaults:
 
 actor_model: ???
 algo: ""
-env_name: ""
 test_mode: both
 test_ep: 100
 test_viz_ep: 50
 eval_seed: 100
 save_path: ""
-render: false
-robot_type: "" # "", "single_integrator", "unicycle"
+render: false # render=True -> render_mode="human"/render=False -> render_mode="rgb_array"
 
 hydra:
   job:

@@ -4,6 +4,7 @@ import inspect
 import os
 import sys
 from argparse import Namespace
+from datetime import datetime
 from pathlib import Path
 
 import hydra
@@ -29,6 +30,14 @@ METHOD_NEEDS_QP_RELATIVE = {
 
 
 MAIN_DIR = str(ROOT_DIR)
+
+
+def _resolve_eval_save_path(actor_model: str, save_path: str | None) -> str:
+    if save_path is not None and str(save_path).strip():
+        return str(save_path)
+    actor_dir = os.path.dirname(os.path.abspath(actor_model))
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join(actor_dir, ts)
 
 
 def _filter_policy_kwargs(policy_class, policy_kwargs):
@@ -83,7 +92,7 @@ def run_policy_test(
     policy.eval()
 
     actor = RLEvalActorAdapter(policy, env.action_space, device)
-    save_path = save_path or os.path.dirname(actor_model)
+    save_path = _resolve_eval_save_path(actor_model, save_path)
 
     mode = str(test_mode).lower().strip()
     if mode in ("eval", "both"):
@@ -131,14 +140,7 @@ def _build_policy_kwargs_from_config(cfg, method):
 
 def main(args):
     cfg = Config()
-    if str(args.robot_type).strip():
-        robot_type = str(args.robot_type).strip()
-        if robot_type not in ("single_integrator", "unicycle"):
-            raise ValueError(
-                f"Unsupported robot_type '{robot_type}'. Expected one of: '', single_integrator, unicycle."
-            )
-        cfg.robot.type = robot_type
-    env_name = args.env_name if args.env_name else cfg.env.get("name", "social_nav_var_num")
+    env_name = cfg.env.get("name", "social_nav_var_num")
     render_mode = "human" if args.render else "rgb_array"
     env = build_env(env_name, render_mode=render_mode, config=cfg)
 
