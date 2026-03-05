@@ -1,0 +1,5 @@
+# @package _global_
+
+# Observation preprocessing knobs consumed by main_vec.
+obs_topk: 5
+obs_farest_dist: 5.0

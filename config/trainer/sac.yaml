@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  - common
+  - _self_
+
+# SAC settings.
+algo: sac
+sac_timesteps_per_batch: 2000
+sac_buffer_size: 500000
+sac_batch_size: 256
+sac_start_timesteps: 15000
+sac_updates_per_step: 1
+sac_hidden_sizes: [256, 256]
+sac_tau: 0.005
+sac_actor_lr: 0.0003
+sac_critic_lr: 0.0005
+sac_max_grad_norm: 1.0
+sac_auto_alpha: false
+sac_alpha: 0.001
+sac_alpha_lr: 0.0003
+sac_target_entropy: -1.2
+sac_action_std_init: 0.2
+sac_eval_freq_episodes: 20
+sac_eval_episodes: 20

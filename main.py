@@ -5,14 +5,16 @@
 import os
 import random
 import sys
+from argparse import Namespace
 from datetime import datetime
 
+import hydra
 import numpy as np
 import torch
 import wandb
 import inspect
+from omegaconf import DictConfig, OmegaConf
 
-from config.arguments import get_args
 from config.config import Config
 from crowd_sim.utils import (
     build_env,
@@ -32,6 +34,9 @@ METHOD_NEEDS_QP_RELATIVE = {
     "rlcvarbetaradius": True,
     "rlcvarbetaradius_2nets": True,
 }
+
+
+MAIN_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def set_global_seeds(seed):
@@ -327,6 +332,23 @@ def main(args):
         )
 
 
-if __name__ == "__main__":
-    args = get_args()
+def _to_main_args(cfg: DictConfig) -> Namespace:
+    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+    if not isinstance(cfg_dict, dict):
+        raise TypeError("Hydra config must resolve to a flat dict for main.py.")
+    cfg_dict.pop("hydra", None)
+    return Namespace(**cfg_dict)
+
+
+@hydra.main(
+    config_path=os.path.join(MAIN_DIR, "config"),
+    config_name="main",
+    version_base=None,
+)
+def hydra_main(cfg: DictConfig):
+    args = _to_main_args(cfg)
     main(args)
+
+
+if __name__ == "__main__":
+    hydra_main()

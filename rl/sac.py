@@ -726,6 +726,7 @@ class SAC:
         return obs
 
     def _init_hyperparameters(self, hyperparameters):
+        # Defaults aligned with config/trainer/common.yaml + config/trainer/sac.yaml
         self.timesteps_per_batch = 2_000
         self.max_timesteps_per_episode = 200
         self.n_updates_per_iteration = 8
@@ -742,21 +743,21 @@ class SAC:
         self.hidden_sizes = (256, 256)
         self.max_grad_norm = 1.0
 
-        self.alpha = 0.10
-        self.auto_alpha = True
+        self.alpha = 0.001
+        self.auto_alpha = False
         self.alpha_lr = 3e-4
         self.target_entropy = -1.2
         self.action_std_init = 0.20
 
         self.render = False
         self.render_every_i = 50
-        self.save_after_timesteps = 0
+        self.save_after_timesteps = 1_000_000
         self.save_freq = 1_000_000
         self.save_dir = "./"
         self.seed = None
         self.eval_seed = None
         self.eval_env = None
-        self.eval_freq_episodes = 0
+        self.eval_freq_episodes = 20
         self.eval_episodes = 20
         self.device = torch.device("cpu")
         self.obs_topk = 5

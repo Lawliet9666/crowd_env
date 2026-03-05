@@ -1,0 +1,6 @@
+# @package _global_
+
+# Policy method and optional warm-start checkpoints.
+method: rl
+actor_model: ""
+critic_model: ""

@@ -174,62 +174,55 @@ rel = [rx - hx, ry - hy]
 
 ## Training and Evaluation
 
-This repo now supports both `SAC` and `PPO` in:
-- `main.py` (single environment)
-- `main_vec.py` (vectorized environments)
+Both entrypoints are Hydra-native:
+- `main.py` (single environment, SAC path)
+- `main_vec.py` (vectorized, PPO or SAC)
 
-Algorithm is selected with:
+Print resolved config:
 
 ```bash
---algo sac   # default
---algo ppo
+python main.py --cfg job --resolve
+python main_vec.py --cfg job --resolve
 ```
 
-### `main.py` (Single-Environment)
+### `main.py` (Single-Environment, SAC)
 
-Train SAC:
+Train:
 
 ```bash
-python main.py --mode train --algo sac --method rl
+python main.py mode=train trainer=sac method=rl total_timesteps=2000000
 ```
 
-Train PPO:
+Test:
 
 ```bash
-python main.py --mode train --algo ppo --method rl
-```
-
-Test a trained model:
-
-```bash
-python main.py --mode test --algo sac --actor_model trained_models/.../sac_actor.pth --test_ep 100
-python main.py --mode test --algo ppo --actor_model trained_models/.../ppo_actor.pth --test_ep 100
+python main.py mode=test trainer=sac method=rl \
+  actor_model=trained_models/default/<run_name>/sac_actor.pth test_ep=100
 ```
 
 ### `main_vec.py` (Vectorized)
 
-`main_vec.py` uses `AsyncVectorEnv` and auto-sets the number of envs to `multiprocessing.cpu_count()`.
-
-Train SAC (vectorized):
+Train PPO:
 
 ```bash
-python main_vec.py --mode train --algo sac --method rl
+python main_vec.py mode=train trainer=ppo method=rlcbfgamma \
+  total_timesteps=2000000 num_envs=8
 ```
 
-Train PPO (vectorized):
+Train SAC:
 
 ```bash
-python main_vec.py --mode train --algo ppo --method rl
+python main_vec.py mode=train trainer=sac method=rl \
+  total_timesteps=2000000 num_envs=8
 ```
 
-Test (vectorized entrypoint):
+Test:
 
 ```bash
-python main_vec.py --mode test --algo sac --method rl --actor_model trained_models/.../sac_actor.pth
-python main_vec.py --mode test --algo ppo --method rl --actor_model trained_models/.../ppo_actor.pth
+python main_vec.py mode=test trainer=ppo method=rlcbfgamma \
+  actor_model=trained_models/default/<run_name>/ppo_actor_step_500000.pth \
+  test_mode=both test_ep=100 test_viz_ep=50 eval_seed=100
 ```
-
-Note: `main_vec.py` currently enforces `--method rl`.
 
 
 
@@ -238,22 +231,22 @@ Note: `main_vec.py` currently enforces `--method rl`.
 ### A) Visual eval for one checkpoint (`main_vec.py`，`main.py`)
 
 Use this when you want to directly inspect trajectory behavior and GIFs for a specific actor checkpoint.
-default algo is sac
+
 ```bash
 python main_vec.py \
-  --mode test \
-  --method rl \
-  --algo ppo \
-  --actor_model trained_models/default/20260227_111328_unicycle_rl_ppo/ppo_actor_step_500000.pth \
-  --test_ep 100 \
-  --test_viz_ep 50 \
-  --eval_seed 100
+  mode=test \
+  trainer=ppo \
+  method=rl \
+  actor_model=trained_models/default/20260227_111328_unicycle_rl_ppo/ppo_actor_step_500000.pth \
+  test_ep=100 \
+  test_viz_ep=50 \
+  eval_seed=100
 ```
 
 - Output folder: `<checkpoint_dir>/<timestamp>/` (contains GIFs and `eval_log.json`).
 - Render behavior is controlled by `render_mode` when creating test env.
 - Default is `rgb_array` (save GIFs).
-- Add `--render` to use `human` mode (show window directly):
+- Set `render=true` to use `human` mode (show window directly).
 
 
 ### B) Batch eval for all actor checkpoints (`eval.py`)
@@ -271,59 +264,37 @@ python eval.py \
 - Outputs one summary JSON in run dir (default: `checkpoint_eval_all_multiseed.json`).
 
 
-## Arguments (Current)
+## Hydra Overrides
 
-### Common Runtime Arguments
+### Common Keys
 
-- `--mode` (`train` or `test`)
-- `--algo` (`sac` or `ppo`)
-- `--method` (`rl`)
-- `--actor_model`, `--critic_model`
+- `mode` (`train` or `test`)
+- `method` (`rl`, `rlcbfgamma`, `rlcbfgamma_2nets`, `rlcvarbetaradius`, `rlcvarbetaradius_2nets`)
+- `actor_model`, `critic_model`
+- `device` (`cuda` or `cpu`)
+- `seed`, `eval_seed`
+- `model_folder`
+- `obs_topk`, `obs_farest_dist`
+- `qp_start_timesteps`
 
-### Common Training / System Arguments
+### Trainer Keys
 
-- `--total_timesteps`
-- `--timesteps_per_batch`
-- `--max_timesteps_per_episode`
-- `--gamma`
-- `--test_ep`, `--test_viz_ep`
-- `--render`, `--render_every_i`
-- `--save_after_timesteps`, `--save_freq`
-- `--model_folder`
-- `--device`
-- `--seed`, `--eval_seed`
-
-### SAC-Specific Arguments
-
-- `--buffer_size`
-- `--batch_size`
-- `--start_timesteps`
-- `--updates_per_step`
-- `--hidden_sizes`
-- `--tau`
-- `--actor_lr`, `--critic_lr`
-- `--sac_max_grad_norm`
-- `--sac_eval_freq_episodes`, `--sac_eval_episodes`
-- `--no_auto_alpha` (default is auto-alpha enabled; pass this flag to disable)
-- `--alpha`, `--alpha_lr`, `--target_entropy`
-- `--action_std_init`
-
-### PPO-Specific Arguments
-
-- `--ppo_n_updates_per_iteration`
-- `--ppo_lr`
-- `--ppo_clip`
-- `--ppo_lam`
-- `--ppo_num_minibatches`
-- `--ppo_ent_coef`
-- `--ppo_target_kl`
-- `--ppo_max_grad_norm`
-- `--ppo_action_std_init`
-- `--ppo_eval_freq_timesteps`, `--ppo_eval_episodes`
+- Shared: `total_timesteps`, `gamma`, `test_ep`, `test_viz_ep`, `render_every_i`, `save_after_timesteps`, `save_freq`
+- PPO (`trainer=ppo`): `n_updates_per_iteration`, `timesteps_per_batch`, `lr`, `clip`, `lam`, `ent_coef`, `target_kl`, `max_grad_norm`, `action_std_init`, `eval_freq_timesteps`, `eval_episodes`
+- SAC (`trainer=sac`): `sac_timesteps_per_batch`, `sac_buffer_size`, `sac_batch_size`, `sac_start_timesteps`, `sac_updates_per_step`, `sac_hidden_sizes`, `sac_tau`, `sac_actor_lr`, `sac_critic_lr`, `sac_max_grad_norm`, `sac_auto_alpha`, `sac_alpha`, `sac_alpha_lr`, `sac_target_entropy`, `sac_action_std_init`, `sac_eval_freq_episodes`, `sac_eval_episodes`
+- Vectorized env count (`main_vec.py`): `num_envs` (`0` means fallback to `cpu_count`)
 
 Evaluation in training can be disabled by setting frequency to `0`:
-- SAC: `--sac_eval_freq_episodes 0`
-- PPO: `--ppo_eval_freq_timesteps 0`
+- SAC: `sac_eval_freq_episodes=0`
+- PPO: `eval_freq_timesteps=0`
+
+### Config Files
+
+- `config/main.yaml` for `main.py`
+- `config/main_vec.yaml` for `main_vec.py`
+- `config/env/crowdsim.yaml` for observation-related env overrides
+- `config/model/default.yaml` for method/checkpoint defaults
+- `config/trainer/common.yaml`, `config/trainer/ppo.yaml`, `config/trainer/sac.yaml`
 
 ## Checkpoints and Output Folder
 
@@ -334,11 +305,11 @@ trained_models/<model_folder>/<timestamp>_<robot_type>_<method>_<algo>/
 ```
 
 Warm-start options:
-- `--actor_model`: load actor before training
-- `--critic_model`: load critic before training
+- `actor_model`: load actor before training
+- `critic_model`: load critic before training
 
 Device behavior:
-- `--device cuda` uses GPU when available
+- `device=cuda` uses GPU when available
 - if CUDA is unavailable, code falls back to CPU automatically
 
 ## Configuration

@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - common
+  - _self_
+
+# PPO settings.
+algo: ppo
+n_updates_per_iteration: 8
+timesteps_per_batch: 8192
+lr: 0.0001
+clip: 0.2
+lam: 0.98
+num_minibatches: 16
+ent_coef: 0.01
+target_kl: 0.02
+max_grad_norm: 0.5
+action_std_init: 0.5
+eval_freq_timesteps: 4000
+eval_episodes: 50

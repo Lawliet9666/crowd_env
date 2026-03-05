@@ -1,0 +1,19 @@
+# Dedicated Hydra config for main_vec.py.
+# This config tree is intentionally separate from new_rl/config.
+defaults:
+  - env: crowdsim
+  - model: default
+  - trainer: ppo
+  - _self_
+
+mode: train
+test_mode: both
+render: false
+model_folder: default
+device: cuda
+seed: 0
+eval_seed: 100
+
+hydra:
+  job:
+    chdir: false

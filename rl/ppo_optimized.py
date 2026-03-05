@@ -712,23 +712,23 @@ class PPO:
 
     def _init_hyperparameters(self, hyperparameters):
         # Initialize default values for hyperparameters
-        # Algorithm hyperparameters
-        self.timesteps_per_batch = 4800                 # Number of timesteps to run per batch
+        # Algorithm hyperparameters (aligned with config/trainer/common.yaml + ppo.yaml)
+        self.timesteps_per_batch = 8192                 # Number of timesteps to run per batch
         self.max_timesteps_per_episode = 400            # Max number of timesteps per episode
-        self.n_updates_per_iteration = 5                # Number of times to update actor/critic per iteration
-        self.lr = 3e-4                                  # Learning rate of actor optimizer
-        self.gamma = 0.95                               # Discount factor to be applied when calculating Rewards-To-Go
+        self.n_updates_per_iteration = 8                # Number of times to update actor/critic per iteration
+        self.lr = 1e-4                                  # Learning rate of actor optimizer
+        self.gamma = 0.99                               # Discount factor to be applied when calculating Rewards-To-Go
         self.clip = 0.2                                 # Recommended 0.2, helps define the threshold to clip the ratio during SGA
 
         self.lam = 0.98                                 # Lambda Parameter for GAE 
         self.num_minibatches = 6                        # Number of mini-batches for Mini-batch Update
-        self.ent_coef = 0                               # Entropy coefficient for Entropy Regularization
+        self.ent_coef = 0.01                            # Entropy coefficient for Entropy Regularization
         self.target_kl = 0.02                           # KL Divergence threshold
         self.max_grad_norm = 0.5                        # Gradient Clipping threshold
         self.action_std_init = 0.5                       # Initial action std (learnable)
-        self.save_after_timesteps = 0                    # First timestep to save checkpoint (0 means disabled)
-        self.save_freq = 0                  # Checkpoint interval in timesteps (0 means disabled)
-        self.eval_freq_timesteps = 200000                # Eval cadence in timesteps
+        self.save_after_timesteps = 1_000_000            # First timestep to save checkpoint (0 means disabled)
+        self.save_freq = 1_000_000                       # Checkpoint interval in timesteps (0 means disabled)
+        self.eval_freq_timesteps = 4000                  # Eval cadence in timesteps
         self.eval_episodes = 50                          # Episodes per periodic evaluation
         self.obs_topk = 5                                # top-k obstacles used by preprocessing
         self.obs_farest_dist = 5.0                       # distance cap/padding for polar preprocessing
@@ -737,7 +737,7 @@ class PPO:
 
         # Miscellaneous parameters
         self.render = False                             # If we should render during rollout
-        self.render_every_i = 10                        # Only render every n iterations
+        self.render_every_i = 50                        # Only render every n iterations
         self.deterministic = False                      # If we're testing, don't sample actions
         self.seed = None								# Sets the seed of our program, used for reproducibility of results
         self.save_dir = './'                            # Directory to save models

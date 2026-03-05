@@ -1,0 +1,17 @@
+# Dedicated Hydra config for main.py (single-env SAC entrypoint).
+defaults:
+  - env: crowdsim
+  - model: default
+  - trainer: sac
+  - _self_
+
+mode: train
+render: false
+model_folder: default
+device: cuda
+seed: 0
+eval_seed: 100
+
+hydra:
+  job:
+    chdir: false

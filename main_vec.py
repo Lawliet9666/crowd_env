@@ -6,14 +6,16 @@ import multiprocessing
 import os
 import random
 import sys
+from argparse import Namespace
 from datetime import datetime
 
+import hydra
 import numpy as np
 import torch
 import wandb
 from gymnasium.vector import AsyncVectorEnv
+from omegaconf import DictConfig, OmegaConf
 
-from config.arguments import get_args
 from config.config import Config
 from crowd_nav.rl_policy_factory import get_rl_policy_class
 from crowd_sim.utils import (
@@ -36,10 +38,13 @@ ALGO_TO_MODEL = {
 
 METHOD_NEEDS_QP_RELATIVE = {
     "rlcbfgamma": True,
-    "rlcbfgamma_v2": True,
+    "rlcbfgamma_2nets": True,
     "rlcvarbetaradius": True,
-    "rlcvarbetaradius_v3": True,
+    "rlcvarbetaradius_2nets": True,
 }
+
+
+MAIN_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def make_env_fn(config, env_name):
@@ -419,6 +424,23 @@ def main(args):
         )
 
 
-if __name__ == "__main__":
-    args = get_args()
+def _to_main_vec_args(cfg: DictConfig) -> Namespace:
+    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+    if not isinstance(cfg_dict, dict):
+        raise TypeError("Hydra config must resolve to a flat dict for main_vec.")
+    cfg_dict.pop("hydra", None)
+    return Namespace(**cfg_dict)
+
+
+@hydra.main(
+    config_path=os.path.join(MAIN_DIR, "config"),
+    config_name="main_vec",
+    version_base=None,
+)
+def hydra_main(cfg: DictConfig):
+    args = _to_main_vec_args(cfg)
     main(args)
+
+
+if __name__ == "__main__":
+    hydra_main()
