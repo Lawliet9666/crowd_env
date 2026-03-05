@@ -20,8 +20,9 @@ from crowd_sim.utils import (
 )
 from rl.vec_ppo import VecPPO
 from rl.vec_sac import VecSAC
-from trainer_common import (
+from trainer import (
     build_base_hyperparameters,
+    build_ppo_hyperparameters,
     build_sac_hyperparameters,
     ensure_unique_exp_name,
     load_checkpoints,
@@ -62,27 +63,7 @@ def get_policy_kwargs(method, config=None):
     return kwargs
 
 
-def build_ppo_hyperparameters(args, base_hyperparameters):
-    hyperparameters = dict(base_hyperparameters)
-    hyperparameters.update(
-        {
-            "n_updates_per_iteration": args.n_updates_per_iteration,
-            "timesteps_per_batch": args.timesteps_per_batch,
-            "clip": args.clip,
-            "lr": args.lr,
-            "gamma": args.gamma,
-            "lam": args.lam,
-            "ent_coef": args.ent_coef,
-            "target_kl": args.target_kl,
-            "max_grad_norm": args.max_grad_norm,
-            "action_std_init": args.action_std_init,
-            "eval_freq_timesteps": args.eval_freq_timesteps,
-            "eval_episodes": args.eval_episodes,
-            "alpha": base_hyperparameters["cbf_alpha"],
-            "beta": base_hyperparameters["cvar_beta"],
-        }
-    )
-    return hyperparameters
+
 
 
 def build_train_exp_name(args, config, num_envs):

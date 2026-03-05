@@ -146,7 +146,28 @@ def build_base_hyperparameters(
         hyperparameters["cvar_beta"] = config.controller["cvar_beta"]
     return hyperparameters
 
-
+def build_ppo_hyperparameters(args, base_hyperparameters):
+    hyperparameters = dict(base_hyperparameters)
+    hyperparameters.update(
+        {
+            "n_updates_per_iteration": args.n_updates_per_iteration,
+            "timesteps_per_batch": args.timesteps_per_batch,
+            "clip": args.clip,
+            "lr": args.lr,
+            "gamma": args.gamma,
+            "lam": args.lam,
+            "ent_coef": args.ent_coef,
+            "target_kl": args.target_kl,
+            "max_grad_norm": args.max_grad_norm,
+            "action_std_init": args.action_std_init,
+            "eval_freq_timesteps": args.eval_freq_timesteps,
+            "eval_episodes": args.eval_episodes,
+            "alpha": base_hyperparameters["cbf_alpha"],
+            "beta": base_hyperparameters["cvar_beta"],
+        }
+    )
+    return hyperparameters
+    
 def build_sac_hyperparameters(args, base_hyperparameters, *, cbf_alpha=None, cvar_beta=None):
     hyperparameters = dict(base_hyperparameters)
     hyperparameters.update(

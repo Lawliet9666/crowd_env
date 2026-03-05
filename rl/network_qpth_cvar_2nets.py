@@ -14,8 +14,8 @@ from rl.network_qpth_cvar import (
 class BarrierNet(BarrierNetV1):
     """
     BarrierNet 2nets (CVaR):
-    - u_nom / beta / r_safe from actor input (polar)
-    - alpha from QP input (relative), via a separate MLP
+    - u_nom from actor input (polar)
+    - alpha / beta / r_safe from QP input (relative), via a separate MLP
     """
 
     def __init__(
@@ -32,17 +32,23 @@ class BarrierNet(BarrierNetV1):
         self.alpha_fc1 = nn.Linear(self.qp_obs_dim, int(alpha_hidden1))
         self.alpha_fc2 = nn.Linear(int(alpha_hidden1), int(alpha_hidden2))
         self.alpha_out = nn.Linear(int(alpha_hidden2), 1)
+        self.beta_out = nn.Linear(int(alpha_hidden2), 1)
+        self.rsafe_out = nn.Linear(int(alpha_hidden2), 1)
         self.alpha_max = float(alpha_max)
         print(
-            f"[CVaRNet 2nets] alpha_from=relative(qp), alpha_max={self.alpha_max:.3f}",
+            f"[CVaRNet 2nets] alpha/beta/r_safe_from=relative(qp), alpha_max={self.alpha_max:.3f}",
             flush=True,
         )
 
-    def _alpha_from_qp_obs(self, obs_qp):
+    def _qp_safety_params_from_obs(self, obs_qp):
         xa = F.silu(self.alpha_fc1(obs_qp))
         xa = F.silu(self.alpha_fc2(xa))
+
         alpha = self.alpha_max * torch.sigmoid(self.alpha_out(xa)).squeeze(-1)
-        return alpha
+        beta = torch.sigmoid(self.beta_out(xa)).squeeze(-1)  # (B,) in [0, 1]
+        r_scale = 1.0 + 1.5 * torch.sigmoid(self.rsafe_out(xa)).squeeze(-1)  # (B,) in [1, 2.5]
+        r_safe_learned = self.safe_dist * r_scale
+        return alpha, beta, r_safe_learned
 
     def forward(self, obs_actor, obs_qp=None):
         if isinstance(obs_actor, np.ndarray):
@@ -69,22 +75,16 @@ class BarrierNet(BarrierNetV1):
                 f"CVaR-BarrierNet(2nets) expected obs_qp dim={self.qp_obs_dim}, got {obs_qp.size(1)}."
             )
 
-        # u_nom / beta / r_safe from actor (polar) branch.
+        # u_nom from actor (polar) branch.
         x = F.silu(self.fc1(obs_actor))
         x21 = F.silu(self.fc21(x))
-        x22 = F.silu(self.fc22(x))
-        x23 = F.silu(self.fc23(x))
-
         u_nom = self.fc31(x21)
-        beta = torch.sigmoid(self.fc32(x22)).squeeze(-1)  # (B,) in [0, 1]
-        self.last_beta = beta
-        r_scale = 1.0 + 1.5 * torch.sigmoid(self.fc33(x23)).squeeze(-1)  # (B,) in [1, 2.5]
-        r_safe_learned = self.safe_dist * r_scale
-        self.last_r_safe = r_safe_learned
 
-        # alpha from relative QP observation branch.
-        alpha = self._alpha_from_qp_obs(obs_qp)
+        # alpha / beta / r_safe from relative QP observation branch.
+        alpha, beta, r_safe_learned = self._qp_safety_params_from_obs(obs_qp)
         self.last_alpha = alpha
+        self.last_beta = beta
+        self.last_r_safe = r_safe_learned
 
         # Warmup phase: bypass QP during training.
         if self.training and int(self.current_timestep) < int(self.qp_start_timesteps):

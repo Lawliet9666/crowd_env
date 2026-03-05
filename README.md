@@ -192,7 +192,7 @@ Train SAC:
 
 ```bash
 python main_vec.py trainer=sac method=rl \
-  total_timesteps=2000000 num_envs=8
+  total_timesteps=500000 num_envs=8
 ```
 
 
