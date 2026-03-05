@@ -309,7 +309,7 @@ python eval/analyze_compare_results.py \
 
 ### Common Keys
 
-- `method` (`rl`, `rlcbfgamma`, `rlcbfgamma_2nets`, `rlcvarbetaradius`, `rlcvarbetaradius_2nets`)
+- `method` (`rl`, `rlcbfgamma`, `rlcbfgamma_2nets`, `rlcbfgamma_2nets_risk`, `rlcvarbetaradius`, `rlcvarbetaradius_2nets`, `rlcvarbetaradius_2nets_risk`)
 - `actor_model`, `critic_model`
 - `device` (`cuda` or `cpu`)
 - `seed`, `eval_seed`
@@ -378,3 +378,6 @@ Robot-related config is under `config.robot` in `config/config.py`:
 
 Extra note for RL with unicycle:
 - If `config.env.rl_xy_to_unicycle=True`, policy outputs `[vx, vy]` and env converts it to `[v, omega]` internally. and in this case, the traing curve is a slow than  `[v, omega]`.
+
+
+great lake: https://vscode.dev/tunnel/gl3025arc-tsumichedu/home/daiyp/CODE/crowd_env/

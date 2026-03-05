@@ -1,7 +1,7 @@
 # @package _global_
 
 # Policy method and optional warm-start checkpoints.
-method: rl # rl, rlcbfgamma, rlcbfgamma_2nets, rlcvarbetaradius, rlcvarbetaradius_2nets
+method: rl # rl, rlcbfgamma, rlcbfgamma_2nets, rlcbfgamma_2nets_risk, rlcvarbetaradius, rlcvarbetaradius_2nets, rlcvarbetaradius_2nets_risk
 actor_model: ""
 critic_model: ""
 

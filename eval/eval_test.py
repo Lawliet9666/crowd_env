@@ -28,8 +28,10 @@ from eval.eval_util import (
 METHOD_NEEDS_QP_RELATIVE = {
     "rlcbfgamma": True,
     "rlcbfgamma_2nets": True,
+    "rlcbfgamma_2nets_risk": True,
     "rlcvarbetaradius": True,
     "rlcvarbetaradius_2nets": True,
+    "rlcvarbetaradius_2nets_risk": True,
 }
 
 
@@ -135,12 +137,15 @@ def main(args):
             "rl",
             "rlcbfgamma",
             "rlcbfgamma_2nets",
+            "rlcbfgamma_2nets_risk",
             "rlcvarbetaradius",
             "rlcvarbetaradius_2nets",
+            "rlcvarbetaradius_2nets_risk",
         ):
             raise ValueError(
                 f"Unsupported method '{args.method}'. "
-                "Expected one of: rl, rlcbfgamma, rlcbfgamma_2nets, rlcvarbetaradius, rlcvarbetaradius_2nets."
+                "Expected one of: rl, rlcbfgamma, rlcbfgamma_2nets, rlcbfgamma_2nets_risk, "
+                "rlcvarbetaradius, rlcvarbetaradius_2nets, rlcvarbetaradius_2nets_risk."
             )
         needs_qp_relative = bool(METHOD_NEEDS_QP_RELATIVE.get(method_key, False))
         test_mode = str(args.test_mode).strip().lower()

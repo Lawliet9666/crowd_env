@@ -21,11 +21,10 @@ unset TRANSFORMERS_CACHE
 
 export WANDB_API_KEY=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
 
-srun --jobid $SLURM_JOBID bash -c 'python main_vec.py run_name=rl_cvar_bf_adaptive trainer=ppo method=rlcbfgamma total_timesteps=20_000_000 num_envs=8 obs_topk=1'
-# sbatch /home/daiyp/CODE/crowd_env/slurm/run_crowdsim_ppo.sh
+srun --jobid $SLURM_JOBID bash -c 'python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcvarbetaradius_2nets total_timesteps=5_000_000 num_envs=8 obs_topk=1'
+# sbatch /home/daiyp/CODE/crowd_env/slurm/run_crowdsim_sac.sh
 # squeue -a | grep daiyp 
 # scancel 44347755
-
 
 # python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcbfgamma total_timesteps=5_000_000 num_envs=8 obs_topk=1
 # python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcbfgamma_2nets total_timesteps=5_000_000 num_envs=8 obs_topk=1

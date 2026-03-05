@@ -12,8 +12,10 @@ import torch
 METHOD_NEEDS_QP_RELATIVE = {
     "rlcbfgamma": True,
     "rlcbfgamma_2nets": True,
+    "rlcbfgamma_2nets_risk": True,
     "rlcvarbetaradius": True,
     "rlcvarbetaradius_2nets": True,
+    "rlcvarbetaradius_2nets_risk": True,
 }
 
 
