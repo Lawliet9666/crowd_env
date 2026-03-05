@@ -170,11 +170,13 @@ For `rlcbfgamma*` and `rlcvarbetaradius*`, the QP layer additionally consumes an
 
 Training entrypoint is Hydra-native:
 - `main_vec.py` (vectorized, PPO or SAC)
+- `main_opt.py` (non-RL controller evaluation)
 
 Print resolved config:
 
 ```bash
 python main_vec.py --cfg job --resolve
+python main_opt.py --cfg job --resolve
 python eval/eval_test.py --cfg job --resolve
 ```
 
@@ -183,15 +185,25 @@ python eval/eval_test.py --cfg job --resolve
 Train PPO:
 
 ```bash
-python main_vec.py trainer=ppo method=rlcbfgamma \
-  total_timesteps=2000000 num_envs=16
+# python main_vec.py trainer=ppo method=rlcbfgamma \
+#   total_timesteps=2000000 num_envs=16
+python main_vec.py run_name=rl_cvar_bf_adaptive trainer=ppo method=rl total_timesteps=2000000 num_envs=8 obs_topk=1 
 ```
 
 Train SAC:
 
 ```bash
-python main_vec.py trainer=sac method=rl \
-  total_timesteps=500000 num_envs=8
+# python main_vec.py trainer=sac method=rl \
+#   total_timesteps=500000 num_envs=8
+python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rl total_timesteps=500000 num_envs=8 obs_topk=1 
+```
+
+### `main_opt.py` (Controller Baselines)
+
+Run non-RL controllers:
+
+```bash
+python main_opt.py method=cbfqp test_mode=both test_ep=100 test_viz_ep=20
 ```
 
 

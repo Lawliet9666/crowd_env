@@ -1,0 +1,17 @@
+# Dedicated Hydra config for main_opt.py (non-RL controller evaluation).
+defaults:
+  - env: crowdsim
+  - _self_
+
+method: cbfqp # orca, social_force, nominal, cbfqp, cvarqp, adapcvarqp, drcvarqp
+test_mode: both # eval, crossing, both
+test_ep: 100
+test_viz_ep: 50
+render: false
+model_folder: default
+seed: 0
+eval_seed: 100
+
+hydra:
+  job:
+    chdir: false
