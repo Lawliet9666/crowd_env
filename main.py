@@ -28,8 +28,9 @@ from rl.sac import SAC
 
 METHOD_NEEDS_QP_RELATIVE = {
     "rlcbfgamma": True,
-    "rlcbfgamma_v2": True,
+    "rlcbfgamma_2nets": True,
     "rlcvarbetaradius": True,
+    "rlcvarbetaradius_2nets": True,
 }
 
 

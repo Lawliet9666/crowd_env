@@ -8,7 +8,7 @@ from rl.network_qpth_v1 import BarrierNet as BarrierNetV1
 
 class BarrierNet(BarrierNetV1):
     """
-    BarrierNet v2 (rlcbfgamma_v2):
+    BarrierNet v2 (rlcbfgamma_2nets):
     - u_nom branch uses actor input (polar): fc1 -> fc21 -> fc31
     - alpha branch uses QP input (relative): alpha_fc1 -> alpha_fc2 -> alpha_out
     """

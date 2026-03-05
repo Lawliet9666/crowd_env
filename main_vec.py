@@ -36,8 +36,9 @@ ALGO_TO_MODEL = {
 
 METHOD_NEEDS_QP_RELATIVE = {
     "rlcbfgamma": True,
-    "rlcbfgamma_v2": True,
+    "rlcbfgamma_2nets": True,
     "rlcvarbetaradius": True,
+    "rlcvarbetaradius_2nets": True,
 }
 
 
@@ -63,7 +64,7 @@ def resolve_needs_qp_relative(method):
 
 def get_policy_kwargs(method, config=None):
     kwargs = {}
-    cvar_methods = {"rlcvarbetaradius"}
+    cvar_methods = {"rlcvarbetaradius", "rlcvarbetaradius_2nets"}
     if config is not None and method in cvar_methods:
         gmm_cfg = dict(config.human_params.get("gmm", {}))
         kwargs.update(
