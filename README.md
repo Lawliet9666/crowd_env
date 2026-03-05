@@ -187,7 +187,7 @@ Train PPO:
 ```bash
 # python main_vec.py trainer=ppo method=rlcbfgamma \
 #   total_timesteps=2000000 num_envs=16
-python main_vec.py run_name=rl_cvar_bf_adaptive trainer=ppo method=rl total_timesteps=2000000 num_envs=8 obs_topk=1 
+python main_vec.py run_name=rl_cvar_bf_adaptive trainer=ppo method=rl total_timesteps=20_000_000 num_envs=8 obs_topk=1 
 ```
 
 Train SAC:
@@ -195,7 +195,7 @@ Train SAC:
 ```bash
 # python main_vec.py trainer=sac method=rl \
 #   total_timesteps=500000 num_envs=8
-python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rl total_timesteps=500000 num_envs=8 obs_topk=1 
+python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rl total_timesteps=5_000_000 num_envs=8 obs_topk=1 
 ```
 
 ### `main_opt.py` (Controller Baselines)
