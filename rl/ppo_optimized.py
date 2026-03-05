@@ -359,8 +359,9 @@ class PPO:
         if hasattr(self, "actor") and hasattr(self.actor, "set_timestep"):
             self.actor.set_timestep(int(timestep))
 
+    @torch.no_grad()
 
-    def evaluate_policy_internal(self, K, step): # TODO: multiple seeds evlauation
+    def _evaluate_policy_internal(self, K, step): # TODO: multiple seeds evlauation
         print(f"DEBUG: Evaluating policy at step {step}...", flush=True)
         self._set_actor_timestep(step)
         ret_list = []
@@ -373,7 +374,7 @@ class PPO:
         
         for ep in range(K):
             eval_seed = None if self.eval_seed is None else int(self.eval_seed) + int(ep)
-            obs, _ = self.eval_env.reset(seed=eval_seed)
+            obs, _ = self.eval_env.reset(seed=None)
             done = False
             ep_ret = 0
             ep_len = 0

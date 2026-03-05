@@ -9,6 +9,7 @@ test_ep: 100
 test_viz_ep: 50
 render: false
 model_folder: default
+actor_model: "" # optional; if set, outputs are saved under dirname(actor_model)/<scenario_folder>
 seed: 0
 eval_seed: 100
 

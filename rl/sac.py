@@ -556,7 +556,7 @@ class SAC:
 
         for ep in range(episodes):
             eval_seed = None if self.eval_seed is None else int(self.eval_seed) + ep
-            obs_raw, _ = self.eval_env.reset(seed=eval_seed)
+            obs_raw, _ = self.eval_env.reset(seed=None)
             obs_actor, obs_qp = self._preprocess_obs_pair(obs_raw)
 
             done = False

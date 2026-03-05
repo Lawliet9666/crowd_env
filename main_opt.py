@@ -1,5 +1,4 @@
 import os
-from datetime import datetime
 
 import hydra
 from omegaconf import DictConfig
@@ -25,16 +24,29 @@ VALID_METHODS = {
 VALID_TEST_MODES = {"eval", "crossing", "both"}
 
 
-def _prepare_save_dirs(cfg: DictConfig, robot_type: str):
-    base_dir = os.path.join(
-        "trained_models",
-        str(cfg.model_folder),
-        f"{robot_type}_{cfg.method}",
+def _build_scenario_output_name(config: Config) -> str:
+    robot_type = str(config.robot.get("type", "robot"))
+    obstacle_count = int(config.human.get("num_humans", 0))
+    vmax = float(config.robot.get("vmax", 0.0))
+    omega_max = float(config.robot.get("omega_max", 0.0))
+    return f"{robot_type}_obs_{obstacle_count}_vmax_{vmax:g}_omegamax_{omega_max:g}"
+
+
+def _prepare_save_dirs(cfg: DictConfig, config: Config):
+    actor_model = str(cfg.get("actor_model", "") or "").strip()
+    if actor_model:
+        base_dir = os.path.dirname(os.path.abspath(actor_model))
+    else:
+        base_dir = os.path.join(
+            "trained_models",
+            str(cfg.model_folder),
+        )
+    save_dir = os.path.join(
+        base_dir,
+        _build_scenario_output_name(config),
     )
-    run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(base_dir, run_name)
-    os.makedirs(run_dir, exist_ok=True)
-    return base_dir, run_dir
+    os.makedirs(save_dir, exist_ok=True)
+    return base_dir, save_dir
 
 
 def main(cfg: DictConfig):
@@ -56,7 +68,7 @@ def main(cfg: DictConfig):
     render_mode = "human" if bool(cfg.render) else "rgb_array"
     env = build_env(env_name, render_mode=render_mode, config=config)
     controller = build_robot_controller(method, config, env)
-    base_save_dir, save_dir = _prepare_save_dirs(cfg, config.robot.type)
+    base_save_dir, save_dir = _prepare_save_dirs(cfg, config)
     dump_test_config(save_dir, config, extra={"eval_seed": cfg.eval_seed, "method": method})
     print(f"Evaluation base dir: {base_save_dir}", flush=True)
     print(f"Evaluation outputs: {save_dir}", flush=True)

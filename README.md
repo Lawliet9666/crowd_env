@@ -206,6 +206,10 @@ Run non-RL controllers:
 python main_opt.py method=cbfqp test_mode=both test_ep=100 test_viz_ep=20
 ```
 
+- Output directory:
+  - if `actor_model` is set: `dirname(actor_model)/{robot_type}_obs_{obstacle_count}_vmax_{vmax}_omegamax_{omega_max}`
+  - otherwise: `trained_models/<model_folder>/{robot_type}_obs_{obstacle_count}_vmax_{vmax}_omegamax_{omega_max}`
+
 
 
 ## Evaluation
