@@ -157,7 +157,7 @@ class PPO:
 
             # --- EVALUATION BLOCK ---
             if self.eval_freq_timesteps > 0 and (t_so_far - self.last_eval_timestep) >= self.eval_freq_timesteps:
-                self.evaluate_policy_internal(K= max(1, self.eval_episodes), step=t_so_far)
+                self._evaluate_policy_internal(K=max(1, self.eval_episodes), step=t_so_far)
                 self.last_eval_timestep = t_so_far
             # ------------------------
 
