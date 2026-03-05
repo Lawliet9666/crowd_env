@@ -48,7 +48,7 @@ class BarrierNet(nn.Module):
         self.current_timestep = 0
         if self.qp_obs_dim <= 6 or (self.qp_obs_dim - 6) % 6 != 0:
             raise ValueError(
-                f"CVaR-BarrierNet(v2) invalid qp_obs_dim={self.qp_obs_dim}. Expected 6 + 6*K with K>=1."
+                f"CVaR-BarrierNet invalid qp_obs_dim={self.qp_obs_dim}. Expected 6 + 6*K with K>=1."
             )
         self.obs_topk = int((self.qp_obs_dim - 6) // 6)
 
@@ -74,7 +74,7 @@ class BarrierNet(nn.Module):
             self._cbf_name = "unknown"
 
         print(
-            f"[CVaRNet v2] robot_type={self.robot_type}, safe_dist={self.safe_dist:.3f}, umax={self.u_max}, obs_topk={self.obs_topk}, actor_input=polar, qp_start_timesteps={self.qp_start_timesteps}",
+            f"[CVaRNet] robot_type={self.robot_type}, safe_dist={self.safe_dist:.3f}, umax={self.u_max}, obs_topk={self.obs_topk}, actor_input=polar, qp_start_timesteps={self.qp_start_timesteps}",
             flush=True,
         )
         self.predictor = TrajPredictor(
@@ -133,7 +133,7 @@ class BarrierNet(nn.Module):
         if isinstance(obs_actor, np.ndarray):
             obs_actor = torch.tensor(obs_actor, dtype=torch.float)
         if obs_qp is None:
-            raise ValueError("CVaR-BarrierNet(v2) requires dual input: obs_actor (polar) and obs_qp (relative).")
+            raise ValueError("CVaR-BarrierNet requires dual input: obs_actor (polar) and obs_qp (relative).")
         if isinstance(obs_qp, np.ndarray):
             obs_qp = torch.tensor(obs_qp, dtype=torch.float)
 
@@ -147,11 +147,11 @@ class BarrierNet(nn.Module):
         obs_qp = obs_qp.reshape(obs_qp.size(0), -1)
         if obs_actor.size(1) != self.actor_obs_dim:
             raise ValueError(
-                f"CVaR-BarrierNet(v2) expected obs_actor dim={self.actor_obs_dim}, got {obs_actor.size(1)}."
+                f"CVaR-BarrierNet expected obs_actor dim={self.actor_obs_dim}, got {obs_actor.size(1)}."
             )
         if obs_qp.size(1) != self.qp_obs_dim:
             raise ValueError(
-                f"CVaR-BarrierNet(v2) expected obs_qp dim={self.qp_obs_dim}, got {obs_qp.size(1)}."
+                f"CVaR-BarrierNet expected obs_qp dim={self.qp_obs_dim}, got {obs_qp.size(1)}."
             )
 
         x = F.silu(self.fc1(obs_actor))
@@ -181,7 +181,7 @@ class BarrierNet(nn.Module):
         elif self.robot_type == 'unicycle_dynamic':
             raise NotImplementedError("dCVaR_CBF_UnicycleDynamic not implemented")
         else:
-            raise NotImplementedError(f"Robot type {self.robot_type} not supported in CVaR BarrierNet v2")
+            raise NotImplementedError(f"Robot type {self.robot_type} not supported in CVaR BarrierNet")
         return u_safe
 
     def dCVaR_CBF_SI(self, obs, u_nom, beta, r_safe_learned):

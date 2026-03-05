@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from rl.network_qpth_v1 import BarrierNet as BarrierNetV1
+from rl.network_qpth import BarrierNet as BarrierNetV1
 
 
 class BarrierNet(BarrierNetV1):
@@ -29,7 +29,7 @@ class BarrierNet(BarrierNetV1):
         self.alpha_out = nn.Linear(int(alpha_hidden2), 1)
         self.alpha_max = float(alpha_max)
         print(
-            f"[CBFNet v2] alpha_from=relative(qp), alpha_max={self.alpha_max:.3f}",
+            f"[CBFNet 2nets] alpha_from=relative(qp), alpha_max={self.alpha_max:.3f}",
             flush=True,
         )
 
@@ -37,7 +37,7 @@ class BarrierNet(BarrierNetV1):
         if isinstance(obs_actor, np.ndarray):
             obs_actor = torch.tensor(obs_actor, dtype=torch.float)
         if obs_qp is None:
-            raise ValueError("BarrierNet(v2) requires dual input: obs_actor (polar) and obs_qp (relative).")
+            raise ValueError("BarrierNet(2nets) requires dual input: obs_actor (polar) and obs_qp (relative).")
         if isinstance(obs_qp, np.ndarray):
             obs_qp = torch.tensor(obs_qp, dtype=torch.float)
 
@@ -53,11 +53,11 @@ class BarrierNet(BarrierNetV1):
         obs_qp = obs_qp.reshape(obs_qp.size(0), -1)
         if obs_actor.size(1) != self.actor_obs_dim:
             raise ValueError(
-                f"BarrierNet(v2) expected obs_actor dim={self.actor_obs_dim}, got {obs_actor.size(1)}."
+                f"BarrierNet(2nets) expected obs_actor dim={self.actor_obs_dim}, got {obs_actor.size(1)}."
             )
         if obs_qp.size(1) != self.qp_obs_dim:
             raise ValueError(
-                f"BarrierNet(v2) expected obs_qp dim={self.qp_obs_dim}, got {obs_qp.size(1)}."
+                f"BarrierNet(2nets) expected obs_qp dim={self.qp_obs_dim}, got {obs_qp.size(1)}."
             )
 
         # u_nom from actor (polar) branch
@@ -81,4 +81,4 @@ class BarrierNet(BarrierNetV1):
             return self.dCBF_Unicycle(obs_qp, unom, alpha)
         if self.robot_type == "unicycle_dynamic":
             return torch.zeros_like(unom)
-        raise NotImplementedError(f"Robot type {self.robot_type} not supported in BarrierNet(v2)")
+        raise NotImplementedError(f"Robot type {self.robot_type} not supported in BarrierNet(2nets)")

@@ -13,11 +13,8 @@ def get_rl_policy_class(method: str):
         import rl.network_qpth_2nets as cbf_u_gamma_2nets
         return cbf_u_gamma_2nets.BarrierNet
     if method == "rlcvar":
-        import rl.network_qpth_cvar_v0 as cvar_cbf
-        return cvar_cbf.BarrierNet
-    if method == "rlcvarbeta":
-        import rl.network_qpth_cvar_v0 as cvar_cbf_u_beta
-        return cvar_cbf_u_beta.BarrierNet
+        import rl.network_qpth_cvar_v0 as cvar_cbf_u
+        return cvar_cbf_u.BarrierNet
     if method == "rlcvarbetaradius":
         import rl.network_qpth_cvar as cvar_cbf_u_beta_r
         return cvar_cbf_u_beta_r.BarrierNet

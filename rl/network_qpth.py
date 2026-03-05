@@ -39,7 +39,7 @@ class BarrierNet(nn.Module):
         self.current_timestep = 0
         if self.qp_obs_dim <= 6 or (self.qp_obs_dim - 6) % 6 != 0:
             raise ValueError(
-                f"BarrierNet(v1) invalid qp_obs_dim={self.qp_obs_dim}. Expected 6 + 6*K with K>=1."
+                f"BarrierNet invalid qp_obs_dim={self.qp_obs_dim}. Expected 6 + 6*K with K>=1."
             )
         self.obs_topk = int((self.qp_obs_dim - 6) // 6)
         self.last_alpha = alpha
@@ -97,11 +97,11 @@ class BarrierNet(nn.Module):
         obs_qp = obs_qp.reshape(obs_qp.size(0), -1)
         if obs_actor.size(1) != self.actor_obs_dim:
             raise ValueError(
-                f"BarrierNet(v1) expected obs_actor dim={self.actor_obs_dim}, got {obs_actor.size(1)}."
+                f"BarrierNet expected obs_actor dim={self.actor_obs_dim}, got {obs_actor.size(1)}."
             )
         if obs_qp.size(1) != self.qp_obs_dim:
             raise ValueError(
-                f"BarrierNet(v1) expected obs_qp dim={self.qp_obs_dim}, got {obs_qp.size(1)}."
+                f"BarrierNet expected obs_qp dim={self.qp_obs_dim}, got {obs_qp.size(1)}."
             )
 
         x = F.silu(self.fc1(obs_actor))
