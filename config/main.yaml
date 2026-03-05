@@ -5,9 +5,9 @@ defaults:
   - trainer: sac
   - _self_
 
-mode: train
 render: false
 model_folder: default
+run_name: null
 device: cuda
 seed: 0
 eval_seed: 100

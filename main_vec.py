@@ -20,12 +20,8 @@ from config.config import Config
 from crowd_nav.rl_policy_factory import get_rl_policy_class
 from crowd_sim.utils import (
     build_env,
-    dump_test_config,
     dump_train_config,
-    polar_obs_dim_from_env_dim,
-    relative_obs_dim_from_env_dim,
 )
-from eval_policy import RLEvalActorAdapter, eval_policy, run_crossing_scenario
 from rl.vec_ppo import VecPPO
 from rl.vec_sac import VecSAC
 
@@ -85,8 +81,6 @@ def get_policy_kwargs(method, config=None):
 def build_base_hyperparameters(args, config, env_name, save_dir, device, needs_qp_relative):
     return {
         "max_timesteps_per_episode": config.env.max_steps,
-        "test_ep": args.test_ep,
-        "test_viz_ep": args.test_viz_ep,
         "env_name": env_name,
         "render": args.render,
         "render_every_i": args.render_every_i,
@@ -161,27 +155,37 @@ def build_sac_hyperparameters(args, base_hyperparameters):
     return hyperparameters
 
 
-def prepare_test_save_dir(actor_model):
-    base_dir = os.path.dirname(actor_model)
-    run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(base_dir, run_name)
-    os.makedirs(run_dir, exist_ok=True)
-    return run_dir
+def build_train_exp_name(args, config, num_envs):
+    base = str(getattr(args, "run_name", "") or "").strip()
+    if not base:
+        actor_model = str(getattr(args, "actor_model", "") or "").strip()
+        actor_file = os.path.basename(actor_model)
+        parent_name = os.path.basename(os.path.dirname(os.path.abspath(actor_model))) if actor_model else ""
+        if actor_file.startswith("bc_actor") and parent_name:
+            base = f"{parent_name[:-3]}_ft" if parent_name.endswith("_bc") else f"{parent_name}_ft"
+        else:
+            base = datetime.now().strftime("%Y%m%d_%H%M%S")
+    robot_type = str(config.robot_params["type"])
+    method = str(args.method)
+    algo = str(args.algo).lower().strip()
 
+    if algo == "sac":
+        name = (
+            f"{base}-{robot_type}-{method}-sac-"
+            f"bs{int(args.sac_batch_size)}-a{args.sac_alpha}-"
+            f"up{int(args.sac_updates_per_step)}-env{int(num_envs)}"
+        )
+        if bool(args.sac_auto_alpha):
+            name += "-auto"
+        return name
 
-def derive_train_exp_name(timestamp, robot_type, method, algo, actor_model):
-    default_name = f"{timestamp}_{robot_type}_{method}_{algo}"
-    if not actor_model:
-        return default_name
-
-    actor_file = os.path.basename(actor_model)
-    parent_name = os.path.basename(os.path.dirname(os.path.abspath(actor_model)))
-    if not actor_file.startswith("bc_actor") or not parent_name:
-        return default_name
-
-    if parent_name.endswith("_bc"):
-        return f"{parent_name[:-3]}_ft"
-    return f"{parent_name}_ft"
+    name = (
+        f"{base}-{robot_type}-{method}-ppo-"
+        f"bs{int(args.timesteps_per_batch)}-ep{int(args.n_updates_per_iteration)}-"
+        f"clip{float(args.clip):g}-"
+        f"ent{float(args.ent_coef):g}-mb{int(args.num_minibatches)}-env{int(num_envs)}"
+    )
+    return name
 
 
 def ensure_unique_exp_name(base_root, exp_name):
@@ -235,69 +239,6 @@ def train(env, num_envs, algo, hyperparameters, actor_model, critic_model, metho
     model.learn(total_timesteps=total_timesteps)
 
 
-def test(env, actor_model, device, method, hyperparameters, algo, test_mode="both"):
-    print(f"Testing {actor_model}", flush=True)
-    if actor_model == "":
-        print("Didn't specify model file. Exiting.", flush=True)
-        sys.exit(0)
-
-    PolicyClass = get_rl_policy_class(method)
-    print(f"Algorithm: {algo.upper()}, Policy: {PolicyClass.__name__}", flush=True)
-
-    env_obs_dim = int(env.observation_space.shape[0])
-    obs_topk = int(hyperparameters.get("obs_topk", 5))
-    obs_farest_dist = float(hyperparameters.get("obs_farest_dist", 5.0))
-    needs_qp_relative = bool(hyperparameters.get("needs_qp_relative", False))
-
-    obs_dim = int(polar_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
-    qp_obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
-
-    act_dim = env.action_space.shape[0]
-    relevant_keys = ["robot_type", "safe_dist", "alpha", "beta", "vmax", "amax", "omega_max", "slack_weight"]
-    policy_kwargs = {k: hyperparameters[k] for k in relevant_keys if k in hyperparameters}
-    if "alpha" not in policy_kwargs and "cbf_alpha" in hyperparameters:
-        policy_kwargs["alpha"] = hyperparameters["cbf_alpha"]
-    if "beta" not in policy_kwargs and "cvar_beta" in hyperparameters:
-        policy_kwargs["beta"] = hyperparameters["cvar_beta"]
-    if needs_qp_relative:
-        policy_kwargs["qp_obs_dim"] = qp_obs_dim
-    policy_kwargs.update(hyperparameters.get("policy_kwargs", {}))
-
-    print(f"Policy Args: {policy_kwargs}", flush=True)
-
-    policy = PolicyClass(obs_dim, act_dim, **policy_kwargs).to(device)
-    policy.load_state_dict(torch.load(actor_model, map_location=device))
-    policy.eval()
-
-    actor = RLEvalActorAdapter(policy, env.action_space, device)
-    eval_seed = hyperparameters.get("eval_seed", hyperparameters["seed"])
-    save_path = hyperparameters.get("test_save_dir", os.path.dirname(actor_model))
-
-    if test_mode in ("eval", "both"):
-        eval_policy(
-            policy=actor,
-            env=env,
-            max_episodes=hyperparameters["test_ep"],
-            save_path=save_path,
-            base_seed=eval_seed,
-            method=method,
-            obs_topk=obs_topk,
-            obs_farest_dist=obs_farest_dist,
-            needs_qp_relative=needs_qp_relative,
-            visualize_episodes=hyperparameters["test_viz_ep"],
-        )
-
-    if test_mode in ("crossing", "both"):
-        run_crossing_scenario(
-            actor,
-            env,
-            save_path=save_path,
-            obs_topk=obs_topk,
-            obs_farest_dist=obs_farest_dist,
-            needs_qp_relative=needs_qp_relative,
-        )
-
-
 def main(args):
     set_global_seeds(args.seed)
 
@@ -321,14 +262,12 @@ def main(args):
     config = Config()
     # config.env.rl_xy_to_unicycle = bool(args.method == "rl" and config.robot.type == "unicycle")
     env_name = config.env.get("name", "social_nav_var_num")
+    num_envs = int(args.num_envs) if int(args.num_envs) > 0 else max(1, multiprocessing.cpu_count())
+    print(f"Requested num_envs={args.num_envs}; using num_envs={num_envs}", flush=True)
 
-    now = datetime.now()
-    timestamp = now.strftime("%Y%m%d_%H%M%S")
-    robot_type = config.robot_params["type"]
     train_root = os.path.join(".", "trained_models", args.model_folder)
-    exp_name = derive_train_exp_name(timestamp, robot_type, args.method, args.algo, args.actor_model)
-    if args.mode == "train":
-        exp_name = ensure_unique_exp_name(train_root, exp_name)
+    exp_name = build_train_exp_name(args, config, num_envs)
+    exp_name = ensure_unique_exp_name(train_root, exp_name)
     save_dir = os.path.join(train_root, exp_name)
 
     base_hyperparameters = build_base_hyperparameters(
@@ -346,82 +285,48 @@ def main(args):
 
     hyperparameters["policy_kwargs"] = get_policy_kwargs(args.method, config=config)
 
-    if args.mode == "train":
-        os.makedirs(save_dir, exist_ok=True)
-        dump_train_config(
-            save_dir,
-            args,
-            config,
-            hyperparameters,
-            extra={
-                "seed": args.seed,
-                "eval_seed": args.eval_seed,
-                "method": args.method,
-                "algo": args.algo,
-            },
-        )
-        print(f"Models will be saved to: {save_dir}", flush=True)
-        wandb.init(project=f"rl_adaptive_cvar_cbf_{args.algo}", name=exp_name, config=hyperparameters)
+    os.makedirs(save_dir, exist_ok=True)
+    dump_train_config(
+        save_dir,
+        args,
+        config,
+        hyperparameters,
+        extra={
+            "seed": args.seed,
+            "eval_seed": args.eval_seed,
+            "method": args.method,
+            "algo": args.algo,
+        },
+    )
+    print(f"Models will be saved to: {save_dir}", flush=True)
+    wandb.init(project=f"rl_adaptive_cvar_cbf_{args.algo}", name=exp_name, config=hyperparameters)
 
-        num_envs = int(args.num_envs) if int(args.num_envs) > 0 else max(1, multiprocessing.cpu_count())
-        print(f"Requested num_envs={args.num_envs}; using num_envs={num_envs}", flush=True)
+    env_fns = [make_env_fn(config, env_name) for _ in range(num_envs)]
+    vec_env = AsyncVectorEnv(env_fns)
+    eval_env = None
 
-        env_fns = [make_env_fn(config, env_name) for _ in range(num_envs)]
-        vec_env = AsyncVectorEnv(env_fns)
-        eval_env = None
+    if args.algo == "ppo" and args.eval_freq_timesteps > 0 and args.eval_episodes > 0:
+        eval_env = build_env(env_name, render_mode=None, config=config)
+        hyperparameters["eval_env"] = eval_env
+    if args.algo == "sac" and args.sac_eval_freq_episodes > 0 and args.sac_eval_episodes > 0:
+        eval_env = build_env(env_name, render_mode=None, config=config)
+        hyperparameters["eval_env"] = eval_env
 
-        if args.algo == "ppo" and args.eval_freq_timesteps > 0 and args.eval_episodes > 0:
-            eval_env = build_env(env_name, render_mode=None, config=config)
-            hyperparameters["eval_env"] = eval_env
-        if args.algo == "sac" and args.sac_eval_freq_episodes > 0 and args.sac_eval_episodes > 0:
-            eval_env = build_env(env_name, render_mode=None, config=config)
-            hyperparameters["eval_env"] = eval_env
-
-        try:
-            train(
-                env=vec_env,
-                num_envs=num_envs,
-                algo=args.algo,
-                hyperparameters=hyperparameters,
-                actor_model=args.actor_model,
-                critic_model=args.critic_model,
-                method=args.method,
-                total_timesteps=args.total_timesteps,
-            )
-        finally:
-            vec_env.close()
-            if eval_env is not None and hasattr(eval_env, "close"):
-                eval_env.close()
-    else:
-        actor_model = args.actor_model
-        if not actor_model or not os.path.exists(actor_model):
-            print(f"Actor model not found: {actor_model}", flush=True)
-            sys.exit(0)
-
-        test_save_dir = prepare_test_save_dir(actor_model)
-        hyperparameters["test_save_dir"] = test_save_dir
-        dump_test_config(
-            test_save_dir,
-            config,
-            hyperparameters=hyperparameters,
-            extra={
-                "eval_seed": args.eval_seed,
-                "method": args.method,
-                "algo": args.algo,
-            },
-        )
-
-        render_mode = "human" if args.render else "rgb_array"
-        env = build_env(env_name, render_mode=render_mode, config=config)
-        test(
-            env=env,
-            actor_model=actor_model,
-            device=device,
-            method=args.method,
-            hyperparameters=hyperparameters,
+    try:
+        train(
+            env=vec_env,
+            num_envs=num_envs,
             algo=args.algo,
-            test_mode=args.test_mode,
+            hyperparameters=hyperparameters,
+            actor_model=args.actor_model,
+            critic_model=args.critic_model,
+            method=args.method,
+            total_timesteps=args.total_timesteps,
         )
+    finally:
+        vec_env.close()
+        if eval_env is not None and hasattr(eval_env, "close"):
+            eval_env.close()
 
 
 def _to_main_vec_args(cfg: DictConfig) -> Namespace:

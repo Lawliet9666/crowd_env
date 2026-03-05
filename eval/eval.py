@@ -9,9 +9,15 @@ import json
 import math
 import os
 import re
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from config.config import Config
 from crowd_sim.utils import (
@@ -19,7 +25,7 @@ from crowd_sim.utils import (
     relative_obs_dim_from_env_dim,
     dump_test_config,
 )
-from eval_policy import RLEvalActorAdapter, run_one_episode, resolve_episode_seed
+from eval.eval_policy import RLEvalActorAdapter, run_one_episode, resolve_episode_seed
 
 FIXED_EVAL_SEEDS = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 EVAL_SUMMARY_FILENAME = "checkpoint_eval_all_multiseed.json"
@@ -267,7 +273,6 @@ def main():
         default="rl",
         help="Policy/controller method (e.g. rl, cbfqp, nominal).",
     )
-    parser.add_argument("--device", type=str, default="cuda", choices=["cpu", "cuda"])
     parser.add_argument(
         "--robot_type",
         type=str,
@@ -292,7 +297,7 @@ def main():
 
     eval_seeds = FIXED_EVAL_SEEDS
 
-    device = torch.device("cuda" if (args.device == "cuda" and torch.cuda.is_available()) else "cpu")
+    device = torch.device("cpu")
 
     cfg = Config()
     if args.robot_type is not None:
@@ -348,7 +353,7 @@ def main():
             "device": str(device),
         },
         extra={
-            "script": "eval.py",
+            "script": "eval/eval.py",
             "config_source": "config.py",
         },
     )

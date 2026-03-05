@@ -18,13 +18,9 @@ from omegaconf import DictConfig, OmegaConf
 from config.config import Config
 from crowd_sim.utils import (
     build_env,
-    polar_obs_dim_from_env_dim,
-    relative_obs_dim_from_env_dim,
     dump_train_config,
-    dump_test_config,
 )
 from crowd_nav.rl_policy_factory import get_rl_policy_class
-from eval_policy import RLEvalActorAdapter, eval_policy
 from rl.sac import SAC
 
 
@@ -52,12 +48,26 @@ def resolve_needs_qp_relative(method):
     return bool(METHOD_NEEDS_QP_RELATIVE.get(method_key, False))
 
 
+def build_sac_exp_name(args, config):
+    base = str(getattr(args, "run_name", "") or "").strip()
+    if not base:
+        base = datetime.now().strftime("%Y%m%d_%H%M%S")
+    robot_type = str(config.robot_params["type"])
+    method = str(args.method)
+    name = (
+        f"{base}-{robot_type}-{method}-sac-"
+        f"bs{int(args.sac_batch_size)}-a{args.sac_alpha}-"
+        f"up{int(args.sac_updates_per_step)}"
+    )
+    if bool(args.sac_auto_alpha):
+        name += "-auto"
+    return name
+
+
 def build_base_hyperparameters(args, config, env_name, max_ep_steps, save_dir, device, needs_qp_relative):
     return {
         "max_timesteps_per_episode": max_ep_steps,
         "gamma": args.gamma,
-        "test_ep": args.test_ep,
-        "test_viz_ep": args.test_viz_ep,
         "env_name": env_name,
         "render": args.render,
         "render_every_i": args.render_every_i,
@@ -134,14 +144,6 @@ def _filter_policy_kwargs(policy_class, policy_kwargs):
         return {}
 
 
-def prepare_test_save_dir(actor_model):
-    base_dir = os.path.dirname(actor_model)
-    run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(base_dir, run_name)
-    os.makedirs(run_dir, exist_ok=True)
-    return run_dir
-
-
 def train(env, method, policy_kwargs, hyperparameters, actor_model, critic_model, total_timesteps):
     print("Training (SAC)", flush=True)
 
@@ -179,53 +181,6 @@ def train(env, method, policy_kwargs, hyperparameters, actor_model, critic_model
     model.learn(total_timesteps=total_timesteps)
 
 
-def test(
-    env,
-    actor_model,
-    device,
-    method,
-    policy_kwargs,
-    obs_topk,
-    obs_farest_dist,
-    needs_qp_relative,
-    test_episodes=50,
-    base_seed=None,
-    save_path=None,
-):
-    print(f"Testing {actor_model}", flush=True)
-
-    if actor_model == "":
-        print("Didn't specify model file. Exiting.", flush=True)
-        sys.exit(0)
-
-    PolicyClass = get_rl_policy_class(method)
-    filtered_policy_kwargs = _filter_policy_kwargs(PolicyClass, policy_kwargs)
-    env_obs_dim = int(env.observation_space.shape[0])
-    obs_dim = polar_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk)
-    qp_obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
-    act_dim = env.action_space.shape[0]
-    if needs_qp_relative:
-        filtered_policy_kwargs["qp_obs_dim"] = qp_obs_dim
-
-    print(f"Policy: {PolicyClass.__name__}, args: {filtered_policy_kwargs}", flush=True)
-    policy = PolicyClass(obs_dim, act_dim, **filtered_policy_kwargs).to(device)
-    policy.load_state_dict(torch.load(actor_model, map_location=device))
-
-    save_path = save_path or os.path.dirname(actor_model)
-    policy = RLEvalActorAdapter(policy, env.action_space, device)
-
-    eval_policy(
-        policy=policy,
-        env=env,
-        max_episodes=test_episodes,
-        save_path=save_path,
-        base_seed=base_seed,
-        obs_topk=obs_topk,
-        obs_farest_dist=obs_farest_dist,
-        needs_qp_relative=needs_qp_relative,
-    )
-
-
 def main(args):
     set_global_seeds(args.seed)
 
@@ -234,9 +189,7 @@ def main(args):
     policy_kwargs = _build_policy_kwargs(args.method, config)
     env_name = config.env.get("name", "social_nav_var_num")
 
-    now = datetime.now()
-    timestamp = now.strftime("%Y%m%d_%H%M%S")
-    exp_name = f"{timestamp}_{config.robot_params['type']}_{args.method}_sac"
+    exp_name = build_sac_exp_name(args, config)
     save_dir = f"./trained_models/{args.model_folder}/{exp_name}"
 
     if args.device == "cuda":
@@ -262,74 +215,44 @@ def main(args):
     )
     hyperparameters = build_sac_hyperparameters(args, base_hyperparameters, config)
 
-    if args.mode == "train":
-        os.makedirs(save_dir, exist_ok=True)
-        dump_train_config(
-            save_dir,
-            args,
-            config,
-            hyperparameters=hyperparameters,
-            extra={"seed": args.seed, "eval_seed": args.eval_seed, "method": args.method},
-        )
-        print(f"Models will be saved to: {save_dir}")
-        wandb.init(
-            project="rl_adaptive_cvar_cbf_sac",
-            name=exp_name,
-            config=hyperparameters,
-        )
+    os.makedirs(save_dir, exist_ok=True)
+    dump_train_config(
+        save_dir,
+        args,
+        config,
+        hyperparameters=hyperparameters,
+        extra={"seed": args.seed, "eval_seed": args.eval_seed, "method": args.method},
+    )
+    print(f"Models will be saved to: {save_dir}")
+    wandb.init(
+        project="rl_adaptive_cvar_cbf_sac",
+        name=exp_name,
+        config=hyperparameters,
+    )
 
-    render_mode = "human" if args.mode == "test" else None
-    env = build_env(env_name, render_mode=render_mode, config=config)
+    env = build_env(env_name, render_mode=None, config=config)
 
-    if args.mode == "train":
-        model_hyperparameters = dict(hyperparameters)
-        eval_env = None
-        if args.sac_eval_freq_episodes > 0 and args.sac_eval_episodes > 0:
-            eval_env = build_env(env_name, render_mode=None, config=config)
-            model_hyperparameters["eval_env"] = eval_env
+    model_hyperparameters = dict(hyperparameters)
+    eval_env = None
+    if args.sac_eval_freq_episodes > 0 and args.sac_eval_episodes > 0:
+        eval_env = build_env(env_name, render_mode=None, config=config)
+        model_hyperparameters["eval_env"] = eval_env
 
-        try:
-            train(
-                env=env,
-                method=args.method,
-                policy_kwargs=policy_kwargs,
-                hyperparameters=model_hyperparameters,
-                actor_model=args.actor_model,
-                critic_model=args.critic_model,
-                total_timesteps=args.total_timesteps,
-            )
-        finally:
-            if eval_env is not None and hasattr(eval_env, "close"):
-                eval_env.close()
-    else:
-        actor_model = args.actor_model
-        if not actor_model or not os.path.exists(actor_model):
-            print(f"Actor model not found: {actor_model}", flush=True)
-            sys.exit(0)
-
-        test_save_dir = prepare_test_save_dir(actor_model)
-        test_hyperparameters = dict(hyperparameters)
-        test_hyperparameters["test_save_dir"] = test_save_dir
-        dump_test_config(
-            test_save_dir,
-            config,
-            hyperparameters=test_hyperparameters,
-            extra={"eval_seed": args.eval_seed, "method": args.method},
-        )
-
-        test(
+    try:
+        train(
             env=env,
-            actor_model=actor_model,
-            device=device,
             method=args.method,
             policy_kwargs=policy_kwargs,
-            obs_topk=args.obs_topk,
-            obs_farest_dist=args.obs_farest_dist,
-            needs_qp_relative=needs_qp_relative,
-            test_episodes=args.test_ep,
-            base_seed=args.eval_seed,
-            save_path=test_save_dir,
+            hyperparameters=model_hyperparameters,
+            actor_model=args.actor_model,
+            critic_model=args.critic_model,
+            total_timesteps=args.total_timesteps,
         )
+    finally:
+        if hasattr(env, "close"):
+            env.close()
+        if eval_env is not None and hasattr(eval_env, "close"):
+            eval_env.close()
 
 
 def _to_main_args(cfg: DictConfig) -> Namespace:

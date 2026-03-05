@@ -6,10 +6,9 @@ defaults:
   - trainer: ppo
   - _self_
 
-mode: train
-test_mode: both
 render: false
 model_folder: default
+run_name: null
 device: cuda
 seed: 0
 eval_seed: 100

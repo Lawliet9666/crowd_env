@@ -1,0 +1,21 @@
+# Dedicated Hydra config for eval/test_runner.py.
+defaults:
+  - env: crowdsim
+  - model: default
+  - _self_
+
+actor_model: ???
+algo: ""
+env_name: ""
+needs_qp_relative: auto
+test_mode: both
+test_ep: 100
+test_viz_ep: 50
+eval_seed: 100
+save_path: ""
+render: false
+robot_type: "" # "", "single_integrator", "unicycle"
+
+hydra:
+  job:
+    chdir: false

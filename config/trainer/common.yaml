@@ -8,5 +8,3 @@ qp_start_timesteps: 0
 save_after_timesteps: 1000000
 save_freq: 1000000
 render_every_i: 50
-test_ep: 100
-test_viz_ep: 50

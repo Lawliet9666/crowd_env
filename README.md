@@ -54,7 +54,7 @@ A good config example is `runs/SACabl-crowdsim-silu-env8-sac_base-bs128-a0.001-a
 
 ## test
 ```
-python scripts/eval.py --save-dir xxx --use-all-obs --visualize
+python eval/eval.py --actor_model <run_name> --episodes_per_seed 50
 ```
 
 
@@ -150,26 +150,20 @@ Notes:
 
 ### B) Network Input (what policy actually sees)
 
-#### PPO / VecPPO / SAC / VecSAC  input
-PPO converts env absolute obs to **relative-format** before actor/critic:
+#### PPO / VecPPO / SAC / VecSAC input
+Actor/critic input is **polar-format**:
 
 ```text
-obs_net_dim = 6 + 6 * K
+obs_actor_dim = 3 + 4 * K
 ```
 
-Robot block:
+for each obstacle slot:
 
 ```text
-[goal_rel_x, goal_rel_y, rvx, rvy, rtheta, r_radius]
-goal_rel = [rx - gx, ry - gy]
+[distance, angle, speed_norm, heading_diff]
 ```
 
-Obstacle block:
-
-```text
-[rel_x, rel_y, hvx, hvy, h_radius, mask]
-rel = [rx - hx, ry - hy]
-```
+For `rlcbfgamma*` and `rlcvarbetaradius*`, the QP layer additionally consumes an internal **relative-format** tensor (`6 + 6*K`) computed from the same raw env observation at the same timestep.
  
 
 ## Training and Evaluation
@@ -177,12 +171,14 @@ rel = [rx - hx, ry - hy]
 Both entrypoints are Hydra-native:
 - `main.py` (single environment, SAC path)
 - `main_vec.py` (vectorized, PPO or SAC)
+- Both are train-only (no `mode` argument).
 
 Print resolved config:
 
 ```bash
 python main.py --cfg job --resolve
 python main_vec.py --cfg job --resolve
+python eval/test_runner.py --cfg job --resolve
 ```
 
 ### `main.py` (Single-Environment, SAC)
@@ -190,14 +186,7 @@ python main_vec.py --cfg job --resolve
 Train:
 
 ```bash
-python main.py mode=train trainer=sac method=rl total_timesteps=2000000
-```
-
-Test:
-
-```bash
-python main.py mode=test trainer=sac method=rl \
-  actor_model=trained_models/default/<run_name>/sac_actor.pth test_ep=100
+python main.py trainer=sac method=rl total_timesteps=2000000
 ```
 
 ### `main_vec.py` (Vectorized)
@@ -205,70 +194,89 @@ python main.py mode=test trainer=sac method=rl \
 Train PPO:
 
 ```bash
-python main_vec.py mode=train trainer=ppo method=rlcbfgamma \
-  total_timesteps=2000000 num_envs=8
+python main_vec.py trainer=ppo method=rlcbfgamma \
+  total_timesteps=2000000 num_envs=16
 ```
 
 Train SAC:
 
 ```bash
-python main_vec.py mode=train trainer=sac method=rl \
+python main_vec.py trainer=sac method=rl \
   total_timesteps=2000000 num_envs=8
-```
-
-Test:
-
-```bash
-python main_vec.py mode=test trainer=ppo method=rlcbfgamma \
-  actor_model=trained_models/default/<run_name>/ppo_actor_step_500000.pth \
-  test_mode=both test_ep=100 test_viz_ep=50 eval_seed=100
 ```
 
 
 
 ## Evaluation
 
-### A) Visual eval for one checkpoint (`main_vec.py`，`main.py`)
+All evaluation scripts default to CPU. `eval/test_runner.py` is CPU-only.
 
-Use this when you want to directly inspect trajectory behavior and GIFs for a specific actor checkpoint.
+### A) Single-checkpoint visual/metric test (`eval/test_runner.py`)
+
+Use this for one actor checkpoint.
 
 ```bash
-python main_vec.py \
-  mode=test \
-  trainer=ppo \
-  method=rl \
-  actor_model=trained_models/default/20260227_111328_unicycle_rl_ppo/ppo_actor_step_500000.pth \
+python eval/test_runner.py \
+  method=rlcbfgamma \
+  actor_model=trained_models/default/20260303_160118_unicycle_rlcbfgamma_ppo/ppo_actor_best.pth \
+  test_mode=both \
   test_ep=100 \
   test_viz_ep=50 \
   eval_seed=100
 ```
 
-- Output folder: `<checkpoint_dir>/<timestamp>/` (contains GIFs and `eval_log.json`).
-- Render behavior is controlled by `render_mode` when creating test env.
-- Default is `rgb_array` (save GIFs).
-- Set `render=true` to use `human` mode (show window directly).
+- `test_mode=eval`: batch episode evaluation.
+- `test_mode=crossing`: fixed crossing scenario visualization.
+- `test_mode=both`: run both.
 
 
-### B) Batch eval for all actor checkpoints (`eval.py`)
+### B) Batch eval for all actor checkpoints (`eval/eval.py`)
 
-Use this when you want robust model selection across many checkpoints and seeds.
+Use this to evaluate all actor checkpoints under one run folder with fixed seeds.
 
 ```bash
-python eval.py \
+python eval/eval.py \
   --actor_model 20260227_111328_unicycle_rl_ppo \
-  --eval_seeds 100,200,300,400,500,600,700,800,900,1000 \
   --episodes_per_seed 50
 ```
 
-- Automatically evaluates all `*actor*.pth` in the run directory.
-- Outputs one summary JSON in run dir (default: `checkpoint_eval_all_multiseed.json`).
+- Evaluates every `*actor*.pth` checkpoint in the folder.
+- Uses fixed multi-seed rollout (`FIXED_EVAL_SEEDS` default).
+- Writes `checkpoint_eval_all_multiseed.json`.
+
+### C) Scenario matrix compare (`eval/run_eval_compare.py`)
+
+Use this for batch comparisons across robot types, obstacle counts, and methods.
+
+```bash
+python eval/run_eval_compare.py
+```
+
+- Iterates scenario grid configured in the script.
+- Calls `eval/eval.py` per method/scenario.
+- Saves outputs under `trained_models/compare/<scenario>/<method>/`.
+
+### D) Seed-advantage GIF analysis (`eval/run_compare_seed_advantage_gifs.py`)
+
+Use this to find seeds where one target method clearly outperforms others and export gifs.
+
+```bash
+python eval/run_compare_seed_advantage_gifs.py \
+  --seed 100 \
+  --target_method rlcvarbetaradius \
+  --robot_type unicycle \
+  --obstacle_number 25
+```
+
+- Evaluates seeds in `[seed, seed + 99]`.
+- Finds seeds where target succeeds and all other compared methods fail.
+- Exports per-method gifs for matched seeds.
 
 
 ## Hydra Overrides
 
 ### Common Keys
 
-- `mode` (`train` or `test`)
 - `method` (`rl`, `rlcbfgamma`, `rlcbfgamma_2nets`, `rlcvarbetaradius`, `rlcvarbetaradius_2nets`)
 - `actor_model`, `critic_model`
 - `device` (`cuda` or `cpu`)
@@ -279,8 +287,8 @@ python eval.py \
 
 ### Trainer Keys
 
-- Shared: `total_timesteps`, `gamma`, `test_ep`, `test_viz_ep`, `render_every_i`, `save_after_timesteps`, `save_freq`
-- PPO (`trainer=ppo`): `n_updates_per_iteration`, `timesteps_per_batch`, `lr`, `clip`, `lam`, `ent_coef`, `target_kl`, `max_grad_norm`, `action_std_init`, `eval_freq_timesteps`, `eval_episodes`
+- Shared: `total_timesteps`, `gamma`, `render_every_i`, `save_after_timesteps`, `save_freq`
+- PPO (`trainer=ppo`): `n_updates_per_iteration`, `timesteps_per_batch`, `lr`, `clip`, `lam`, `num_minibatches`, `ent_coef`, `target_kl`, `max_grad_norm`, `action_std_init`, `eval_freq_timesteps`, `eval_episodes`
 - SAC (`trainer=sac`): `sac_timesteps_per_batch`, `sac_buffer_size`, `sac_batch_size`, `sac_start_timesteps`, `sac_updates_per_step`, `sac_hidden_sizes`, `sac_tau`, `sac_actor_lr`, `sac_critic_lr`, `sac_max_grad_norm`, `sac_auto_alpha`, `sac_alpha`, `sac_alpha_lr`, `sac_target_entropy`, `sac_action_std_init`, `sac_eval_freq_episodes`, `sac_eval_episodes`
 - Vectorized env count (`main_vec.py`): `num_envs` (`0` means fallback to `cpu_count`)
 
@@ -292,9 +300,11 @@ Evaluation in training can be disabled by setting frequency to `0`:
 
 - `config/main.yaml` for `main.py`
 - `config/main_vec.yaml` for `main_vec.py`
+- `config/test_runner.yaml` for `eval/test_runner.py`
 - `config/env/crowdsim.yaml` for observation-related env overrides
 - `config/model/default.yaml` for method/checkpoint defaults
 - `config/trainer/common.yaml`, `config/trainer/ppo.yaml`, `config/trainer/sac.yaml`
+- `eval/test_runner.py` standalone single-checkpoint evaluation script
 
 ## Checkpoints and Output Folder
 

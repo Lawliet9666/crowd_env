@@ -364,8 +364,9 @@ class PPO:
         # fail_save_dir = os.path.join(self.save_dir, 'eval_failures')
         # os.makedirs(fail_save_dir, exist_ok=True)
         
-        for _ in range(K):
-            obs, _ = self.eval_env.reset()
+        for ep in range(K):
+            eval_seed = None if self.eval_seed is None else int(self.eval_seed) + int(ep)
+            obs, _ = self.eval_env.reset(seed=eval_seed)
             done = False
             ep_ret = 0
             ep_len = 0
@@ -740,6 +741,7 @@ class PPO:
         self.render_every_i = 50                        # Only render every n iterations
         self.deterministic = False                      # If we're testing, don't sample actions
         self.seed = None								# Sets the seed of our program, used for reproducibility of results
+        self.eval_seed = None                         # Base seed for periodic evaluation (defaults to seed when unset)
         self.save_dir = './'                            # Directory to save models
         self.device = torch.device('cpu')               # Device to run on
 
@@ -767,6 +769,9 @@ class PPO:
 
         if hasattr(self, 'save_dir'):
             os.makedirs(self.save_dir, exist_ok=True)
+
+        if self.eval_seed is None:
+            self.eval_seed = self.seed
         
         # Sets the seed if specified
         if self.seed != None:
