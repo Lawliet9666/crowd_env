@@ -262,13 +262,13 @@ class SocialForceController:
     """
 
     def __init__(self, config_file, env=None):
-        self.robot_type = config_file.robot_params["type"]
-        env_params = config_file.env_params
-        human_params = config_file.human_params
+        self.robot_type = config_file.robot["type"]
+        env_params = config_file.env
+        human_params = config_file.human
         dt = float(env_params["dt"])
         sf_params = human_params.get("sf", {})
         self.max_obstacles_obs = int(env_params.get("max_obstacles_obs", human_params.get("num_humans", 10)))
-        self.robot_vpref = float(config_file.robot_params.get("vmax", 1.0))
+        self.robot_vpref = float(config_file.robot.get("vmax", 1.0))
         hv = human_params.get("vmax", 1.0)
         self.human_vpref = float(hv if np.isscalar(hv) else hv[1])
 

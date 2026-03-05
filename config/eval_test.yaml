@@ -1,4 +1,4 @@
-# Dedicated Hydra config for eval/test_runner.py.
+# Dedicated Hydra config for eval/eval_test.py.
 defaults:
   - env: crowdsim
   - model: default

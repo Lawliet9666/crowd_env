@@ -25,7 +25,7 @@ from crowd_sim.utils import (
     relative_obs_dim_from_env_dim,
     dump_test_config,
 )
-from eval.eval_policy import RLEvalActorAdapter, run_one_episode, resolve_episode_seed
+from eval.eval_util import RLEvalActorAdapter, run_one_episode, resolve_episode_seed
 
 FIXED_EVAL_SEEDS = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 EVAL_SUMMARY_FILENAME = "checkpoint_eval_all_multiseed.json"
@@ -353,7 +353,7 @@ def main():
             "device": str(device),
         },
         extra={
-            "script": "eval/eval.py",
+            "script": "eval/eval_batch.py",
             "config_source": "config.py",
         },
     )

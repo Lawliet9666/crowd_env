@@ -18,7 +18,7 @@ def run_eval(
 ):
     cmd = [
         sys.executable,
-        str(root_dir / "eval" / "eval.py"),
+        str(root_dir / "eval" / "eval_batch.py"),
         "--actor_model",
         actor_model_rel,
         "--method",
@@ -45,7 +45,7 @@ def evaluate_one_scenario(
     rl_source_by_method: dict,
 ):
     scenario = f"{robot_type}_obs_{obstacle_count}"
-    # eval.py resolves run_dir as trained_models/<actor_model>.
+    # eval_batch.py resolves run_dir as trained_models/<actor_model>.
     # So actor_model should be "compare/<scenario>/<method>".
     base_rel = f"compare/{scenario}"
     base_dir = trained_models_dir / "compare" / scenario

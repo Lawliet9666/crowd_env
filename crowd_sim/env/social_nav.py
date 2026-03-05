@@ -16,7 +16,7 @@ class SocialNav(gym.Env):
         self.render_mode = render_mode
         
         # Load params from Config
-        env_params = config_file.env_params
+        env_params = config_file.env
         self.dt = env_params['dt']
         self.max_steps = env_params['max_steps']
         self.sensing_radius = float(env_params.get('sensing_radius', 5.0))
@@ -26,7 +26,7 @@ class SocialNav(gym.Env):
         self.unicycle_k_omega = float(env_params.get('unicycle_k_omega', 2.0))
 
         # --- 0. Initialize Robot Model ---
-        robot_params = config_file.robot_params
+        robot_params = config_file.robot
         self.robot_radius = robot_params['radius']
         self.robot_pos = np.zeros(2)
         self.robot_vel = np.zeros(2)
@@ -51,7 +51,7 @@ class SocialNav(gym.Env):
             
 
         # --- 1. Initialize Humans ---
-        human_params = config_file.human_params
+        human_params = config_file.human
         self.num_humans = int(human_params.get('num_humans', 1))
 
         self.human_radii = np.zeros(self.num_humans, dtype=float)  
@@ -133,7 +133,7 @@ class SocialNav(gym.Env):
 
         # --- Reward Parameters (CrowdNav++) ---
         self.current_step = 0
-        rew_params = config_file.reward_params
+        rew_params = config_file.reward
         self.success_reward = rew_params['success_reward']
         self.collision_penalty = rew_params['collision_penalty']
         self.discomfort_dist = rew_params['discomfort_dist']

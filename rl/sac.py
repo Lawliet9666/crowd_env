@@ -156,7 +156,7 @@ class SAC:
         self.q1_target.load_state_dict(self.q1.state_dict())
         self.q2_target.load_state_dict(self.q2.state_dict())
 
-        # Compatibility with existing warm-start path in main.py
+        # Compatibility with warm-start code paths that load into model.critic
         self.critic = self.q1
 
         self.actor_optim = torch.optim.Adam(
@@ -216,7 +216,7 @@ class SAC:
         )
 
         if not self._same_state_dict(self.q1, self.q1_target):
-            # q1 was likely warm-started externally through model.critic in main.py.
+            # q1 was likely warm-started externally through model.critic.
             self.q2.load_state_dict(self.q1.state_dict())
             self.q1_target.load_state_dict(self.q1.state_dict())
             self.q2_target.load_state_dict(self.q1.state_dict())

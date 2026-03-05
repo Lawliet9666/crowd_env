@@ -26,7 +26,7 @@ from crowd_sim.utils import (
 
 class PPO:
     """
-        This is the PPO class we will use as our model in main.py
+        PPO model used by the training entrypoint.
     """
     def __init__(self, policy_class, env, **hyperparameters):
         """

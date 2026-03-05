@@ -3,8 +3,8 @@
 # Common training/evaluation settings.
 total_timesteps: 20000000
 gamma: 0.99
-num_envs: 8
-qp_start_timesteps: 0
+num_envs: 8 # number of parallel environments, ppo:16, sac:8
+qp_start_timesteps: 0 # warmup qp solver for 1000000 steps
 save_after_timesteps: 1000000
 save_freq: 1000000
 render_every_i: 50

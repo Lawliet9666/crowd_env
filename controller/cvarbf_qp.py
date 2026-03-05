@@ -9,9 +9,9 @@ from crowd_sim.utils import absolute_obs_to_relative, parse_obstacles
 class CVaRBFQPController:
     def __init__(self, config_file, env=None):
         # Load params from Config
-        robot_params = config_file.robot_params
-        human_params = config_file.human_params
-        ctrl_params = config_file.controller_params
+        robot_params = config_file.robot
+        human_params = config_file.human
+        ctrl_params = config_file.controller
 
         self.env = env
         self.robot = env.robot

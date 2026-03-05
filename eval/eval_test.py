@@ -18,7 +18,7 @@ from config.config import Config
 from crowd_nav.rl_policy_factory import get_rl_policy_class
 from crowd_sim.utils import build_env
 from crowd_sim.utils import polar_obs_dim_from_env_dim, relative_obs_dim_from_env_dim
-from eval.eval_policy import RLEvalActorAdapter, eval_policy, run_crossing_scenario
+from eval.eval_util import RLEvalActorAdapter, eval_policy, run_crossing_scenario
 
 METHOD_NEEDS_QP_RELATIVE = {
     "rlcbfgamma": True,
@@ -123,19 +123,17 @@ def _resolve_bool_or_auto(text, *, default):
 
 
 def _build_policy_kwargs_from_config(cfg, method):
-    gmm_cfg = dict(cfg.human_params.get("gmm", {}))
+    gmm_cfg = dict(cfg.human.get("gmm", {}))
     kwargs = {
-        "robot_type": cfg.robot_params["type"],
-        "safe_dist": cfg.controller_params["safety_margin"]
-        + cfg.human_params["radius"]
-        + cfg.robot_params["radius"],
-        "alpha": cfg.controller_params["cbf_alpha"],
-        "beta": cfg.controller_params["cvar_beta"],
-        "vmax": cfg.robot_params["vmax"],
-        "amax": cfg.robot_params["amax"],
-        "omega_max": cfg.robot_params["omega_max"],
+        "robot_type": cfg.robot["type"],
+        "safe_dist": cfg.controller["safety_margin"] + cfg.human["radius"] + cfg.robot["radius"],
+        "alpha": cfg.controller["cbf_alpha"],
+        "beta": cfg.controller["cvar_beta"],
+        "vmax": cfg.robot["vmax"],
+        "amax": cfg.robot["amax"],
+        "omega_max": cfg.robot["omega_max"],
     }
-    if str(method).strip().lower() in ("rlcvarbetaradius", "rlcvarbetaradius_v3"):
+    if str(method).strip().lower() in ("rlcvarbetaradius", "rlcvarbetaradius_2nets"):
         kwargs["gmm_weights"] = gmm_cfg.get("weights")
         kwargs["gmm_stds"] = gmm_cfg.get("stds")
         kwargs["gmm_lateral_ratio"] = gmm_cfg.get("lateral_ratio", 0.3)
@@ -198,21 +196,21 @@ def main(args):
             env.close()
 
 
-def _to_test_runner_args(cfg: DictConfig) -> Namespace:
+def _to_eval_test_args(cfg: DictConfig) -> Namespace:
     cfg_dict = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(cfg_dict, dict):
-        raise TypeError("Hydra config must resolve to a flat dict for test_runner.")
+        raise TypeError("Hydra config must resolve to a flat dict for eval_test.")
     cfg_dict.pop("hydra", None)
     return Namespace(**cfg_dict)
 
 
 @hydra.main(
     config_path=os.path.join(MAIN_DIR, "config"),
-    config_name="test_runner",
+    config_name="eval_test",
     version_base=None,
 )
 def hydra_main(cfg: DictConfig):
-    args = _to_test_runner_args(cfg)
+    args = _to_eval_test_args(cfg)
     main(args)
 
 

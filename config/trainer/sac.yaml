@@ -5,7 +5,7 @@ defaults:
 
 # SAC settings.
 algo: sac
-sac_timesteps_per_batch: 2000
+sac_timesteps_per_batch: 2048
 sac_buffer_size: 500000
 sac_batch_size: 256
 sac_start_timesteps: 15000
@@ -20,5 +20,6 @@ sac_alpha: 0.001
 sac_alpha_lr: 0.0003
 sac_target_entropy: -1.2
 sac_action_std_init: 0.2
+
 sac_eval_freq_episodes: 20
 sac_eval_episodes: 20

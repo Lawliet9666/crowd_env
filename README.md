@@ -54,7 +54,7 @@ A good config example is `runs/SACabl-crowdsim-silu-env8-sac_base-bs128-a0.001-a
 
 ## test
 ```
-python eval/eval.py --actor_model <run_name> --episodes_per_seed 50
+python eval/eval_batch.py --actor_model <run_name> --episodes_per_seed 50
 ```
 
 
@@ -168,25 +168,15 @@ For `rlcbfgamma*` and `rlcvarbetaradius*`, the QP layer additionally consumes an
 
 ## Training and Evaluation
 
-Both entrypoints are Hydra-native:
-- `main.py` (single environment, SAC path)
+Training entrypoint is Hydra-native:
 - `main_vec.py` (vectorized, PPO or SAC)
-- Both are train-only (no `mode` argument).
+- Train-only (no `mode` argument).
 
 Print resolved config:
 
 ```bash
-python main.py --cfg job --resolve
 python main_vec.py --cfg job --resolve
-python eval/test_runner.py --cfg job --resolve
-```
-
-### `main.py` (Single-Environment, SAC)
-
-Train:
-
-```bash
-python main.py trainer=sac method=rl total_timesteps=2000000
+python eval/eval_test.py --cfg job --resolve
 ```
 
 ### `main_vec.py` (Vectorized)
@@ -209,14 +199,14 @@ python main_vec.py trainer=sac method=rl \
 
 ## Evaluation
 
-All evaluation scripts default to CPU. `eval/test_runner.py` is CPU-only.
+All evaluation scripts default to CPU. `eval/eval_test.py` is CPU-only.
 
-### A) Single-checkpoint visual/metric test (`eval/test_runner.py`)
+### A) Single-checkpoint visual/metric test (`eval/eval_test.py`)
 
 Use this for one actor checkpoint.
 
 ```bash
-python eval/test_runner.py \
+python eval/eval_test.py \
   method=rlcbfgamma \
   actor_model=trained_models/default/20260303_160118_unicycle_rlcbfgamma_ppo/ppo_actor_best.pth \
   test_mode=both \
@@ -230,12 +220,12 @@ python eval/test_runner.py \
 - `test_mode=both`: run both.
 
 
-### B) Batch eval for all actor checkpoints (`eval/eval.py`)
+### B) Batch eval for all actor checkpoints (`eval/eval_batch.py`)
 
 Use this to evaluate all actor checkpoints under one run folder with fixed seeds.
 
 ```bash
-python eval/eval.py \
+python eval/eval_batch.py \
   --actor_model 20260227_111328_unicycle_rl_ppo \
   --episodes_per_seed 50
 ```
@@ -253,7 +243,7 @@ python eval/run_eval_compare.py
 ```
 
 - Iterates scenario grid configured in the script.
-- Calls `eval/eval.py` per method/scenario.
+- Calls `eval/eval_batch.py` per method/scenario.
 - Saves outputs under `trained_models/compare/<scenario>/<method>/`.
 
 ### D) Seed-advantage GIF analysis (`eval/run_compare_seed_advantage_gifs.py`)
@@ -272,6 +262,20 @@ python eval/run_compare_seed_advantage_gifs.py \
 - Finds seeds where target succeeds and all other compared methods fail.
 - Exports per-method gifs for matched seeds.
 
+### E) Compare-result summary report (`eval/analyze_compare_results.py`)
+
+Use this to aggregate `trained_models/compare` into CSV/Markdown plus figures.
+
+```bash
+python eval/analyze_compare_results.py \
+  --compare_root trained_models/compare \
+  --out_dir trained_models/compare \
+  --dpi 160
+```
+
+- Writes `summary_compare_metrics.csv` and `summary_compare_report.md`.
+- Writes success-rate plots like `success_rate_vs_obstacles_<robot_type>.png`.
+- Writes radar outputs `radar_metrics_summary.csv` and `radar_metrics_<robot_type>.png`.
 
 ## Hydra Overrides
 
@@ -298,13 +302,12 @@ Evaluation in training can be disabled by setting frequency to `0`:
 
 ### Config Files
 
-- `config/main.yaml` for `main.py`
 - `config/main_vec.yaml` for `main_vec.py`
-- `config/test_runner.yaml` for `eval/test_runner.py`
+- `config/eval_test.yaml` for `eval/eval_test.py`
 - `config/env/crowdsim.yaml` for observation-related env overrides
 - `config/model/default.yaml` for method/checkpoint defaults
 - `config/trainer/common.yaml`, `config/trainer/ppo.yaml`, `config/trainer/sac.yaml`
-- `eval/test_runner.py` standalone single-checkpoint evaluation script
+- `eval/eval_test.py` standalone single-checkpoint evaluation script
 
 ## Checkpoints and Output Folder
 

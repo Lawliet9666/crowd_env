@@ -10,9 +10,9 @@ class NominalController:
     """
 
     def __init__(self, config_file, env=None):
-        robot_params = config_file.robot_params
-        ctrl_params = config_file.controller_params
-        env_params = config_file.env_params
+        robot_params = config_file.robot
+        ctrl_params = config_file.controller
+        env_params = config_file.env
 
         self.env = env
         self.robot_type = str(robot_params["type"])

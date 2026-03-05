@@ -32,7 +32,7 @@ from config.config import Config
 from controller.robot_controller_factory import build_robot_controller
 from crowd_nav.rl_policy_factory import get_rl_policy_class
 from crowd_sim.utils import build_env, relative_obs_dim_from_env_dim
-from eval.eval_policy import RLEvalActorAdapter, run_one_episode
+from eval.eval_util import RLEvalActorAdapter, run_one_episode
 
 
 DEFAULT_METHOD_ORDER = [
