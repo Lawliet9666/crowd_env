@@ -11,28 +11,32 @@ For matched seeds, this script renders GIFs for all methods.
 
 from __future__ import annotations
 
-import argparse
 import copy
 import json
+import os
 import random
 import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import hydra
 import imageio
 import numpy as np
 import torch
+from omegaconf import DictConfig
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+MAIN_DIR = str(ROOT_DIR)
 
 from config.config import Config
 from controller.robot_controller_factory import build_robot_controller
 from crowd_nav.rl_policy_factory import get_rl_policy_class
-from crowd_sim.utils import build_env
-from eval.eval_util import RLEvalActorAdapter, run_one_episode
+from crowd_sim.utils import build_env, polar_obs_dim_from_env_dim, relative_obs_dim_from_env_dim
+from eval.policy_kwargs import build_eval_policy_kwargs, filter_policy_kwargs
+from eval.eval_util import RLEvalActorAdapter, build_obs_preprocess_fn, run_one_episode
 
 
 DEFAULT_METHOD_ORDER = [
@@ -47,8 +51,6 @@ DEFAULT_METHOD_ORDER = [
 ]
 DEFAULT_FPS = 10
 SEED_WINDOW = 100
-DEFAULT_OBS_TOPK = 5
-DEFAULT_OBS_FAREST_DIST = 5.0
 
 METHOD_NEEDS_QP_RELATIVE = {
     "rlcbfgamma": True,
@@ -60,69 +62,6 @@ METHOD_NEEDS_QP_RELATIVE = {
 
 def _resolve_needs_qp_relative(method: str) -> bool:
     return bool(METHOD_NEEDS_QP_RELATIVE.get(str(method).strip().lower(), False))
-
-
-def _extract_actor_obs_dim_from_state_dict(state: Dict[str, Any]) -> int:
-    if not isinstance(state, dict):
-        raise TypeError(f"Expected checkpoint state_dict as dict, got {type(state).__name__}")
-
-    candidates = (
-        "fc1.weight",
-        "module.fc1.weight",
-        "actor.fc1.weight",
-        "module.actor.fc1.weight",
-    )
-    weight = None
-    for key in candidates:
-        if key in state:
-            weight = state[key]
-            break
-    if weight is None:
-        for key, value in state.items():
-            if not key.endswith(".fc1.weight"):
-                continue
-            if "alpha_fc1" in key:
-                continue
-            weight = value
-            break
-    if weight is None:
-        raise KeyError("Could not find actor fc1.weight in checkpoint state_dict.")
-    if not torch.is_tensor(weight) or weight.ndim != 2:
-        raise ValueError("Invalid actor fc1.weight in checkpoint state_dict.")
-    return int(weight.shape[1])
-
-
-def _infer_obs_topk_from_actor_dim(actor_obs_dim: int) -> int:
-    d = int(actor_obs_dim)
-    if d >= 3 and (d - 3) % 4 == 0:
-        k = (d - 3) // 4
-        if k > 0:
-            return int(k)
-    raise ValueError(
-        f"Checkpoint actor obs_dim={d} is not polar-format (expected 3 + 4*K). "
-        "Relative-format RL checkpoints are not supported by run_compare_seed_advantage_gifs."
-    )
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--seed",
-        type=int,
-        required=True,
-        help="Start seed. Script evaluates [seed, seed+99].",
-    )
-    parser.add_argument("--compare_root", type=str, default="trained_models/compare")
-    parser.add_argument("--target_method", type=str, default="rlcvarbetaradius")
-    parser.add_argument("--robot_type", type=str, default="unicycle")
-    parser.add_argument("--obstacle_number", type=int, default=25)
-    parser.add_argument(
-        "--out_dir",
-        type=str,
-        default="",
-        help="Output directory. Default: <compare_root>/<robot_type>_obs_<obstacle_number>/seed_<seed>_<seed+99>",
-    )
-    return parser.parse_args()
 
 
 def parse_scenario_name(name: str) -> Tuple[Optional[str], Optional[int]]:
@@ -199,7 +138,7 @@ def discover_methods(scenario_dir: Path) -> List[str]:
         if name.startswith("__"):
             continue
         # Exclude this script's own output folders inside scenario dir.
-        if re.fullmatch(r"seed_\\d+_\\d+", name):
+        if re.fullmatch(r"seed_\d+_\d+", name):
             continue
         # Keep known method dirs; for unknown dirs, only keep if they look like eval method folders.
         if name not in DEFAULT_METHOD_ORDER and not (d / "checkpoint_eval_all_multiseed.json").exists():
@@ -257,52 +196,21 @@ def resolve_actor_checkpoint(method_dir: Path) -> Optional[Path]:
     return actor_ckpts[-1]
 
 
-def _radius_scalar(v: Any) -> float:
-    if isinstance(v, (list, tuple, np.ndarray)):
-        arr = np.asarray(v, dtype=np.float64).reshape(-1)
-        if arr.size == 0:
-            return 0.0
-        return float(np.max(arr))
-    return float(v)
-
-
-def _policy_kwargs(cfg: Config) -> Dict[str, Any]:
-    safe_dist = (
-        float(cfg.controller.safety_margin)
-        + _radius_scalar(cfg.human.radius)
-        + _radius_scalar(cfg.robot.radius)
-    )
-    return {
-        "robot_type": cfg.robot.type,
-        "safe_dist": safe_dist,
-        "alpha": float(cfg.controller.cbf_alpha),
-        "beta": float(cfg.controller.cvar_beta),
-        "vmax": float(cfg.robot.vmax),
-        "amax": float(cfg.robot.amax),
-        "omega_max": float(cfg.robot.omega_max),
-    }
-
-
-def _policy_kwargs_for_method(cfg: Config, method: str, *, qp_obs_dim: Optional[int]) -> Dict[str, Any]:
-    kwargs = _policy_kwargs(cfg)
-    method_key = str(method).strip().lower()
-    if method_key in ("rlcvarbetaradius", "rlcvarbetaradius_2nets"):
-        gmm_cfg = dict(cfg.human.get("gmm", {}))
-        kwargs["gmm_weights"] = gmm_cfg.get("weights")
-        kwargs["gmm_stds"] = gmm_cfg.get("stds")
-        kwargs["gmm_lateral_ratio"] = gmm_cfg.get("lateral_ratio", 0.3)
-    if qp_obs_dim is not None:
-        kwargs["qp_obs_dim"] = int(qp_obs_dim)
-    return kwargs
-
-
 def build_actor_for_method(
     method: str,
     method_dir: Path,
     cfg: Config,
     env,
     device: torch.device,
-) -> Tuple[Any, Optional[Path], int, bool]:
+    *,
+    obs_topk: int,
+    obs_farest_dist: float,
+    nHidden1: int,
+    nHidden21: int,
+    nHidden22: int,
+    alpha_hidden1: int,
+    alpha_hidden2: int,
+) -> Tuple[Any, Optional[Path], Any]:
     if _is_rl_method(method):
         PolicyClass = get_rl_policy_class(method)
         ckpt_path = resolve_actor_checkpoint(method_dir)
@@ -312,20 +220,34 @@ def build_actor_for_method(
         state = torch.load(str(ckpt_path), map_location=device)
         if isinstance(state, dict) and isinstance(state.get("state_dict"), dict):
             state = state["state_dict"]
-        actor_obs_dim = _extract_actor_obs_dim_from_state_dict(state)
-        obs_topk = _infer_obs_topk_from_actor_dim(actor_obs_dim)
+        env_obs_dim = int(env.observation_space.shape[0])
+        actor_obs_dim = int(polar_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
         needs_qp_relative = _resolve_needs_qp_relative(method)
-        qp_obs_dim = (6 + 6 * int(obs_topk)) if needs_qp_relative else None
+        qp_obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk)) if needs_qp_relative else None
         act_dim = env.action_space.shape[0]
-        policy_kwargs = _policy_kwargs_for_method(cfg, method, qp_obs_dim=qp_obs_dim)
-        policy = PolicyClass(actor_obs_dim, act_dim, **policy_kwargs).to(device)
+        policy_kwargs = build_eval_policy_kwargs(
+            cfg,
+            method,
+            qp_obs_dim=qp_obs_dim,
+            nHidden1=int(nHidden1),
+            nHidden21=int(nHidden21),
+            nHidden22=int(nHidden22),
+            alpha_hidden1=int(alpha_hidden1),
+            alpha_hidden2=int(alpha_hidden2),
+        )
+        policy = PolicyClass(actor_obs_dim, act_dim, **filter_policy_kwargs(PolicyClass, policy_kwargs)).to(device)
         policy.load_state_dict(state, strict=True)
         policy.eval()
         actor = RLEvalActorAdapter(policy, env.action_space, device)
-        return actor, ckpt_path, int(obs_topk), bool(needs_qp_relative)
+        obs_preprocess_fn = build_obs_preprocess_fn(
+            obs_topk=int(obs_topk),
+            obs_farest_dist=float(obs_farest_dist),
+            needs_qp_relative=bool(needs_qp_relative),
+        )
+        return actor, ckpt_path, obs_preprocess_fn
 
     actor = build_robot_controller(method, cfg, env)
-    return actor, None, int(DEFAULT_OBS_TOPK), False
+    return actor, None, None
 
 
 def evaluate_one_method(
@@ -336,6 +258,14 @@ def evaluate_one_method(
     seed: int,
     device: torch.device,
     collect_frames: bool,
+    *,
+    obs_topk: int,
+    obs_farest_dist: float,
+    nHidden1: int,
+    nHidden21: int,
+    nHidden22: int,
+    alpha_hidden1: int,
+    alpha_hidden2: int,
 ) -> Dict[str, Any]:
     cfg = copy.deepcopy(scenario_cfg)
     cfg.env.rl_xy_to_unicycle = bool(method == "rl" and cfg.robot.type == "unicycle")
@@ -345,12 +275,19 @@ def evaluate_one_method(
 
     checkpoint_path: Optional[Path] = None
     try:
-        actor, checkpoint_path, obs_topk, needs_qp_relative = build_actor_for_method(
+        actor, checkpoint_path, obs_preprocess_fn = build_actor_for_method(
             method=method,
             method_dir=scenario_dir / method,
             cfg=cfg,
             env=env,
             device=device,
+            obs_topk=int(obs_topk),
+            obs_farest_dist=float(obs_farest_dist),
+            nHidden1=int(nHidden1),
+            nHidden21=int(nHidden21),
+            nHidden22=int(nHidden22),
+            alpha_hidden1=int(alpha_hidden1),
+            alpha_hidden2=int(alpha_hidden2),
         )
         ep = run_one_episode(
             actor=actor,
@@ -360,9 +297,7 @@ def evaluate_one_method(
             track_signals=False,
             unom_holder=None,
             collect_frames=collect_frames,
-            obs_topk=int(obs_topk),
-            obs_farest_dist=float(DEFAULT_OBS_FAREST_DIST),
-            needs_qp_relative=bool(needs_qp_relative),
+            obs_preprocess_fn=obs_preprocess_fn,
         )
 
         success = bool(ep["ep_success"]) and (not bool(ep["ep_collision"]))
@@ -419,27 +354,39 @@ def short_result(res: Dict[str, Any]) -> str:
     )
 
 
-def main() -> None:
-    args = parse_args()
-    compare_root = Path(args.compare_root).resolve()
+def main(cfg: DictConfig) -> None:
+    seed_start = int(cfg.seed)
+    compare_root = Path(str(cfg.compare_root)).resolve()
+    target_method = str(cfg.target_method)
+    robot_type = str(cfg.robot_type)
+    obstacle_number = int(cfg.obstacle_number)
+    out_dir_cfg = str(cfg.out_dir)
+    obs_topk = int(cfg.obs_topk)
+    obs_farest_dist = float(cfg.obs_farest_dist)
+    nHidden1 = int(cfg.nHidden1)
+    nHidden21 = int(cfg.nHidden21)
+    nHidden22 = int(cfg.nHidden22)
+    alpha_hidden1 = int(cfg.alpha_hidden1)
+    alpha_hidden2 = int(cfg.alpha_hidden2)
+
+    if obs_topk <= 0:
+        raise ValueError("--obs_topk must be > 0")
     if not compare_root.exists():
         raise FileNotFoundError(f"compare_root not found: {compare_root}")
 
-    obstacle_number = int(args.obstacle_number)
     if obstacle_number <= 0:
         raise ValueError("--obstacle_number must be > 0")
 
-    scenario_name = f"{args.robot_type}_obs_{obstacle_number}"
+    scenario_name = f"{robot_type}_obs_{obstacle_number}"
     scenario_dir = compare_root / scenario_name
     if not scenario_dir.exists():
         raise FileNotFoundError(f"Scenario directory not found: {scenario_dir}")
 
-    seed_start = int(args.seed)
     seed_end = seed_start + SEED_WINDOW - 1
 
     out_dir = (
-        Path(args.out_dir).resolve()
-        if args.out_dir
+        Path(out_dir_cfg).resolve()
+        if out_dir_cfg
         else (compare_root / scenario_name / f"seed_{seed_start}_{seed_end}")
     )
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -458,14 +405,14 @@ def main() -> None:
     print(f"[Config] compare_root={compare_root}")
     print(f"[Config] scenario={scenario_name}, env={env_name}, methods={methods}")
     print(f"[Config] seed_range=[{seed_start}, {seed_end}], device={device}")
-    print(f"[Config] target_method={args.target_method}")
+    print(f"[Config] target_method={target_method}")
 
     summary: Dict[str, Any] = {
         "seed_start": seed_start,
         "seed_end": seed_end,
         "seed_window": SEED_WINDOW,
-        "target_method": args.target_method,
-        "robot_type": args.robot_type,
+        "target_method": target_method,
+        "robot_type": robot_type,
         "obstacle_number": obstacle_number,
         "scenario": scenario_name,
         "compare_root": str(compare_root),
@@ -476,9 +423,9 @@ def main() -> None:
         "seed_records": [],
     }
 
-    if args.target_method not in methods:
+    if target_method not in methods:
         summary["error"] = (
-            f"target_method '{args.target_method}' not found in {scenario_dir}. "
+            f"target_method '{target_method}' not found in {scenario_dir}. "
             f"Available methods: {methods}"
         )
         summary_path = out_dir / f"{scenario_name}_seed_{seed_start}_{seed_end}_advantage_summary.json"
@@ -501,12 +448,19 @@ def main() -> None:
                 seed=seed,
                 device=device,
                 collect_frames=False,
+                obs_topk=obs_topk,
+                obs_farest_dist=obs_farest_dist,
+                nHidden1=nHidden1,
+                nHidden21=nHidden21,
+                nHidden22=nHidden22,
+                alpha_hidden1=alpha_hidden1,
+                alpha_hidden2=alpha_hidden2,
             )
             first_pass[method] = res
             print(f"    {short_result(res)}", flush=True)
 
-        target_res = first_pass.get(args.target_method)
-        others = [m for m in methods if m != args.target_method]
+        target_res = first_pass.get(target_method)
+        others = [m for m in methods if m != target_method]
         target_success = bool(target_res is not None and target_res.get("success"))
         others_all_fail = bool(others) and all(not bool(first_pass[m].get("success")) for m in others)
         all_methods_ok = all(first_pass[m].get("status") == "ok" for m in methods)
@@ -540,6 +494,13 @@ def main() -> None:
                     seed=seed,
                     device=device,
                     collect_frames=True,
+                    obs_topk=obs_topk,
+                    obs_farest_dist=obs_farest_dist,
+                    nHidden1=nHidden1,
+                    nHidden21=nHidden21,
+                    nHidden22=nHidden22,
+                    alpha_hidden1=alpha_hidden1,
+                    alpha_hidden2=alpha_hidden2,
                 )
 
                 gif_path = None
@@ -578,5 +539,14 @@ def main() -> None:
     print(f"Matched seeds: {summary['matched_seeds']}")
 
 
+@hydra.main(
+    config_path=os.path.join(MAIN_DIR, "config"),
+    config_name="eval_compare_seed_advantage_gifs",
+    version_base=None,
+)
+def hydra_main(cfg: DictConfig):
+    main(cfg)
+
+
 if __name__ == "__main__":
-    main()
+    hydra_main()

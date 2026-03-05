@@ -1,0 +1,16 @@
+# Dedicated Hydra config for eval/run_compare_seed_advantage_gifs.py.
+defaults:
+  - env: crowdsim
+  - model: default
+  - _self_
+
+seed: ???
+compare_root: trained_models/compare
+target_method: rlcvarbetaradius
+robot_type: unicycle
+obstacle_number: 25
+out_dir: ""
+
+hydra:
+  job:
+    chdir: false

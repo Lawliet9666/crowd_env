@@ -1,6 +1,15 @@
 # @package _global_
 
 # Policy method and optional warm-start checkpoints.
-method: rl
+method: rl # rl, rlcbfgamma, rlcbfgamma_2nets, rlcvarbetaradius, rlcvarbetaradius_2nets
 actor_model: ""
 critic_model: ""
+
+# Actor network hidden sizes (passed to rl/network_qpth*.py and rl/network.py).
+nHidden1: 256
+nHidden21: 256
+nHidden22: 256
+
+# Separate safety-head MLP hidden sizes for 2nets variants.
+alpha_hidden1: 128
+alpha_hidden2: 64

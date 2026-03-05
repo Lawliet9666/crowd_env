@@ -97,7 +97,7 @@ def ensure_unique_exp_name(base_root, exp_name):
 
 
 def build_base_hyperparameters(
-    args,
+    cfg,
     config,
     *,
     env_name,
@@ -114,16 +114,16 @@ def build_base_hyperparameters(
         if max_timesteps_per_episode is not None
         else int(config.env.max_steps)
     )
-    resolved_eval_seed = args.eval_seed if eval_seed is None else eval_seed
+    resolved_eval_seed = cfg.eval_seed if eval_seed is None else eval_seed
 
     hyperparameters = {
         "max_timesteps_per_episode": max_steps,
         "env_name": env_name,
-        "render": args.render,
-        "render_every_i": args.render_every_i,
-        "save_after_timesteps": args.save_after_timesteps,
-        "save_freq": args.save_freq,
-        "seed": args.seed,
+        "render": cfg.render,
+        "render_every_i": cfg.render_every_i,
+        "save_after_timesteps": cfg.save_after_timesteps,
+        "save_freq": cfg.save_freq,
+        "seed": cfg.seed,
         "eval_seed": resolved_eval_seed,
         "save_dir": save_dir,
         "device": device,
@@ -134,61 +134,61 @@ def build_base_hyperparameters(
         "vmax": config.robot["vmax"],
         "amax": config.robot["amax"],
         "omega_max": config.robot["omega_max"],
-        "obs_topk": args.obs_topk,
-        "obs_farest_dist": args.obs_farest_dist,
-        "qp_start_timesteps": args.qp_start_timesteps,
+        "obs_topk": cfg.obs_topk,
+        "obs_farest_dist": cfg.obs_farest_dist,
+        "qp_start_timesteps": cfg.qp_start_timesteps,
         "needs_qp_relative": bool(needs_qp_relative),
     }
     if include_gamma:
-        hyperparameters["gamma"] = args.gamma
+        hyperparameters["gamma"] = cfg.gamma
     if include_controller:
         hyperparameters["cbf_alpha"] = config.controller["cbf_alpha"]
         hyperparameters["cvar_beta"] = config.controller["cvar_beta"]
     return hyperparameters
 
-def build_ppo_hyperparameters(args, base_hyperparameters):
+def build_ppo_hyperparameters(cfg, base_hyperparameters):
     hyperparameters = dict(base_hyperparameters)
     hyperparameters.update(
         {
-            "n_updates_per_iteration": args.n_updates_per_iteration,
-            "timesteps_per_batch": args.timesteps_per_batch,
-            "clip": args.clip,
-            "lr": args.lr,
-            "gamma": args.gamma,
-            "lam": args.lam,
-            "ent_coef": args.ent_coef,
-            "target_kl": args.target_kl,
-            "max_grad_norm": args.max_grad_norm,
-            "action_std_init": args.action_std_init,
-            "eval_freq_timesteps": args.eval_freq_timesteps,
-            "eval_episodes": args.eval_episodes,
+            "n_updates_per_iteration": cfg.n_updates_per_iteration,
+            "timesteps_per_batch": cfg.timesteps_per_batch,
+            "clip": cfg.clip,
+            "lr": cfg.lr,
+            "gamma": cfg.gamma,
+            "lam": cfg.lam,
+            "ent_coef": cfg.ent_coef,
+            "target_kl": cfg.target_kl,
+            "max_grad_norm": cfg.max_grad_norm,
+            "action_std_init": cfg.action_std_init,
+            "eval_freq_timesteps": cfg.eval_freq_timesteps,
+            "eval_episodes": cfg.eval_episodes,
             "alpha": base_hyperparameters["cbf_alpha"],
             "beta": base_hyperparameters["cvar_beta"],
         }
     )
     return hyperparameters
     
-def build_sac_hyperparameters(args, base_hyperparameters, *, cbf_alpha=None, cvar_beta=None):
+def build_sac_hyperparameters(cfg, base_hyperparameters, *, cbf_alpha=None, cvar_beta=None):
     hyperparameters = dict(base_hyperparameters)
     hyperparameters.update(
         {
-            "timesteps_per_batch": args.sac_timesteps_per_batch,
-            "buffer_size": args.sac_buffer_size,
-            "batch_size": args.sac_batch_size,
-            "start_timesteps": args.sac_start_timesteps,
-            "updates_per_step": args.sac_updates_per_step,
-            "hidden_sizes": tuple(args.sac_hidden_sizes),
-            "tau": args.sac_tau,
-            "actor_lr": args.sac_actor_lr,
-            "critic_lr": args.sac_critic_lr,
-            "max_grad_norm": args.sac_max_grad_norm,
-            "auto_alpha": args.sac_auto_alpha,
-            "alpha": args.sac_alpha,
-            "alpha_lr": args.sac_alpha_lr,
-            "target_entropy": args.sac_target_entropy,
-            "action_std_init": args.sac_action_std_init,
-            "eval_freq_episodes": args.sac_eval_freq_episodes,
-            "eval_episodes": args.sac_eval_episodes,
+            "timesteps_per_batch": cfg.sac_timesteps_per_batch,
+            "buffer_size": cfg.sac_buffer_size,
+            "batch_size": cfg.sac_batch_size,
+            "start_timesteps": cfg.sac_start_timesteps,
+            "updates_per_step": cfg.sac_updates_per_step,
+            "hidden_sizes": tuple(cfg.sac_hidden_sizes),
+            "tau": cfg.sac_tau,
+            "actor_lr": cfg.sac_actor_lr,
+            "critic_lr": cfg.sac_critic_lr,
+            "max_grad_norm": cfg.sac_max_grad_norm,
+            "auto_alpha": cfg.sac_auto_alpha,
+            "alpha": cfg.sac_alpha,
+            "alpha_lr": cfg.sac_alpha_lr,
+            "target_entropy": cfg.sac_target_entropy,
+            "action_std_init": cfg.sac_action_std_init,
+            "eval_freq_episodes": cfg.sac_eval_freq_episodes,
+            "eval_episodes": cfg.sac_eval_episodes,
         }
     )
     if cbf_alpha is not None:

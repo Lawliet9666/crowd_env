@@ -6,6 +6,7 @@
 
 import os
 import time
+import inspect
 import wandb
 import gymnasium as gym
 import imageio
@@ -86,6 +87,12 @@ class PPO:
             actor_kwargs["qp_obs_dim"] = int(self.qp_obs_dim)
             actor_kwargs["qp_start_timesteps"] = int(self.qp_start_timesteps)
         actor_kwargs.update(getattr(self, "policy_kwargs", {}))
+        try:
+            sig = inspect.signature(policy_class.__init__)
+            accepted = set(sig.parameters.keys())
+            actor_kwargs = {k: v for k, v in actor_kwargs.items() if k in accepted}
+        except (TypeError, ValueError):
+            actor_kwargs = {}
 
         self.actor = policy_class(self.actor_obs_dim, self.act_dim, **actor_kwargs).to(self.device)
         # else:

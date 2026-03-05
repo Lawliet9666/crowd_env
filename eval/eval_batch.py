@@ -3,7 +3,6 @@ Evaluate all actor checkpoints in one run directory using multiple seeds.
 Default behavior: 10 seeds x 50 episodes per seed for every checkpoint.
 """
 
-import argparse
 import glob
 import json
 import math
@@ -12,23 +11,34 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import hydra
 import numpy as np
 import torch
+from omegaconf import DictConfig
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+MAIN_DIR = str(ROOT_DIR)
 
 from config.config import Config
 from crowd_sim.utils import (
     build_env,
     dump_test_config,
+    polar_obs_dim_from_env_dim,
+    relative_obs_dim_from_env_dim,
 )
-from eval.eval_util import RLEvalActorAdapter, run_one_episode, resolve_episode_seed
+from eval.policy_kwargs import build_eval_policy_kwargs, filter_policy_kwargs
+from eval.eval_util import (
+    RLEvalActorAdapter,
+    build_obs_preprocess_fn,
+    resolve_episode_seed,
+    run_one_episode,
+)
 
 FIXED_EVAL_SEEDS = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 EVAL_SUMMARY_FILENAME = "checkpoint_eval_all_multiseed.json"
-DEFAULT_OBS_FAREST_DIST = 5.0
 
 METHOD_NEEDS_QP_RELATIVE = {
     "rlcbfgamma": True,
@@ -40,48 +50,6 @@ METHOD_NEEDS_QP_RELATIVE = {
 
 def _resolve_needs_qp_relative(method: str) -> bool:
     return bool(METHOD_NEEDS_QP_RELATIVE.get(str(method).strip().lower(), False))
-
-
-def _extract_actor_obs_dim_from_state_dict(state: Dict[str, Any]) -> int:
-    if not isinstance(state, dict):
-        raise TypeError(f"Expected checkpoint state_dict as dict, got {type(state).__name__}")
-
-    candidates = (
-        "fc1.weight",
-        "module.fc1.weight",
-        "actor.fc1.weight",
-        "module.actor.fc1.weight",
-    )
-    weight = None
-    for key in candidates:
-        if key in state:
-            weight = state[key]
-            break
-    if weight is None:
-        for key, value in state.items():
-            if not key.endswith(".fc1.weight"):
-                continue
-            if "alpha_fc1" in key:
-                continue
-            weight = value
-            break
-    if weight is None:
-        raise KeyError("Could not find actor fc1.weight in checkpoint state_dict.")
-    if not torch.is_tensor(weight) or weight.ndim != 2:
-        raise ValueError("Invalid actor fc1.weight in checkpoint state_dict.")
-    return int(weight.shape[1])
-
-
-def _infer_obs_topk_from_actor_dim(actor_obs_dim: int) -> int:
-    d = int(actor_obs_dim)
-    if d >= 3 and (d - 3) % 4 == 0:
-        k = (d - 3) // 4
-        if k > 0:
-            return int(k)
-    raise ValueError(
-        f"Checkpoint actor obs_dim={d} is not polar-format (expected 3 + 4*K). "
-        "Relative-format RL checkpoints are not supported by eval_batch."
-    )
 
 
 def _extract_step(path: str) -> int:
@@ -137,9 +105,7 @@ def evaluate_actor(
     episodes: int,
     base_seed: Optional[int],
     *,
-    obs_topk: int,
-    obs_farest_dist: float,
-    needs_qp_relative: bool,
+    obs_preprocess_fn,
 ) -> Dict[str, Any]:
     returns = []
     lens = []
@@ -157,9 +123,7 @@ def evaluate_actor(
             track_signals=False,
             unom_holder=None,
             collect_frames=False,
-            obs_topk=int(obs_topk),
-            obs_farest_dist=float(obs_farest_dist),
-            needs_qp_relative=bool(needs_qp_relative),
+            obs_preprocess_fn=obs_preprocess_fn,
         )
 
         returns.append(float(result["ep_ret"]))
@@ -191,9 +155,7 @@ def _evaluate_over_seeds(
     eval_seeds,
     episodes_per_seed: int,
     *,
-    obs_topk: int,
-    obs_farest_dist: float,
-    needs_qp_relative: bool,
+    obs_preprocess_fn,
 ):
     per_seed = []
     per_seed_full = []
@@ -203,9 +165,7 @@ def _evaluate_over_seeds(
             env,
             episodes=episodes_per_seed,
             base_seed=seed,
-            obs_topk=obs_topk,
-            obs_farest_dist=obs_farest_dist,
-            needs_qp_relative=needs_qp_relative,
+            obs_preprocess_fn=obs_preprocess_fn,
         )
         row_seed = {
             "success_rate": metrics["success_rate"],
@@ -225,28 +185,6 @@ def _evaluate_over_seeds(
 
     agg = _aggregate_per_seed(per_seed_full)
     return per_seed, agg
-
-
-def _policy_kwargs_from_config(cfg: Config, method: str, *, qp_obs_dim: Optional[int]) -> Dict[str, Any]:
-    safe_dist = cfg.controller.safety_margin + cfg.human.radius + cfg.robot.radius
-    kwargs = {
-        "robot_type": cfg.robot.type,
-        "safe_dist": safe_dist,
-        "alpha": cfg.controller.cbf_alpha,
-        "beta": cfg.controller.cvar_beta,
-        "vmax": cfg.robot.vmax,
-        "amax": cfg.robot.amax,
-        "omega_max": cfg.robot.omega_max,
-    }
-    method_key = str(method).strip().lower()
-    if method_key in ("rlcvarbetaradius", "rlcvarbetaradius_2nets"):
-        gmm_cfg = dict(cfg.human.get("gmm", {}))
-        kwargs["gmm_weights"] = gmm_cfg.get("weights")
-        kwargs["gmm_stds"] = gmm_cfg.get("stds")
-        kwargs["gmm_lateral_ratio"] = gmm_cfg.get("lateral_ratio", 0.3)
-    if qp_obs_dim is not None:
-        kwargs["qp_obs_dim"] = int(qp_obs_dim)
-    return kwargs
 
 
 def _summarize_metric(values: List[float]) -> Dict[str, float]:
@@ -344,68 +282,47 @@ def _choose_best(results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return max(valid, key=_key)
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--actor_model",
-        required=True,
-        type=str,
-        help="Run folder name under trained_models (e.g. 20260221_234406_unicycle_rl)",
-    )
-    parser.add_argument(
-        "--episodes_per_seed",
-        type=int,
-        default=50,
-        help="Episodes evaluated for each fixed seed (50..1000).",
-    )
-    parser.add_argument(
-        "--method",
-        type=str,
-        default="rl",
-        help="Policy/controller method (e.g. rl, cbfqp, nominal).",
-    )
-    parser.add_argument(
-        "--robot_type",
-        type=str,
-        default=None,
-        help="Optional robot type override: single_integrator / unicycle.",
-    )
-    parser.add_argument(
-        "--num_humans",
-        type=int,
-        default=None,
-        help="Optional override for config.human.num_humans.",
-    )
-    args = parser.parse_args()
+def main(cfg: DictConfig):
+    run_dir = os.path.abspath(str(cfg.actor_model))
+    method = str(cfg.method)
+    episodes_per_seed = int(cfg.episodes_per_seed)
+    obs_topk = int(cfg.obs_topk)
+    obs_farest_dist = float(cfg.obs_farest_dist)
+    nHidden1 = int(cfg.nHidden1)
+    nHidden21 = int(cfg.nHidden21)
+    nHidden22 = int(cfg.nHidden22)
+    alpha_hidden1 = int(cfg.alpha_hidden1)
+    alpha_hidden2 = int(cfg.alpha_hidden2)
 
-    run_dir = os.path.abspath(os.path.join("trained_models", args.actor_model))
-    if _needs_rl_adapter(args.method) and not os.path.isdir(run_dir):
+    if _needs_rl_adapter(method) and not os.path.isdir(run_dir):
         raise FileNotFoundError(f"Run directory not found: {run_dir}")
     os.makedirs(run_dir, exist_ok=True)
 
-    if args.episodes_per_seed <= 0:
+    if episodes_per_seed <= 0:
         raise ValueError("--episodes_per_seed must be > 0")
+    if obs_topk <= 0:
+        raise ValueError("--obs_topk must be > 0")
 
     eval_seeds = FIXED_EVAL_SEEDS
 
     device = torch.device("cpu")
 
-    cfg = Config()
-    if args.robot_type is not None:
-        cfg.robot.type = args.robot_type
-    if cfg.robot.type == "unicycle":
-        cfg.robot.ini_goal_dist = 6.0
-    elif cfg.robot.type == "single_integrator":
-        cfg.robot.ini_goal_dist = 8.0
-    if args.num_humans is not None:
-        if args.num_humans <= 0:
+    sim_cfg = Config()
+    robot_type = cfg.get("robot_type", None)
+    if robot_type is not None and str(robot_type).strip() != "":
+        sim_cfg.robot.type = str(robot_type).strip()
+    if sim_cfg.robot.type == "unicycle":
+        sim_cfg.robot.ini_goal_dist = 6.0
+    elif sim_cfg.robot.type == "single_integrator":
+        sim_cfg.robot.ini_goal_dist = 8.0
+    num_humans = cfg.get("num_humans", None)
+    if num_humans is not None:
+        if int(num_humans) <= 0:
             raise ValueError("--num_humans must be > 0")
-        human_count = int(args.num_humans)
-        cfg.human.num_humans = human_count
+        sim_cfg.human.num_humans = int(num_humans)
 
-    method = args.method
-    # cfg.env.rl_xy_to_unicycle = bool(method == "rl" and cfg.robot.type == "unicycle")
-    env_name = cfg.env.get("name", "social_nav_var_num")
+    # sim_cfg.env.rl_xy_to_unicycle = bool(method == "rl" and sim_cfg.robot.type == "unicycle")
+    env_name = sim_cfg.env.get("name", "social_nav_var_num")
 
     is_rl_method = _needs_rl_adapter(method)
     checkpoints: List[Dict[str, Any]]
@@ -423,25 +340,32 @@ def main():
             }
         ]
     _print_eval_context(
-        cfg=cfg,
+        cfg=sim_cfg,
         method=method,
         env_name=env_name,
         is_rl_method=is_rl_method,
         num_checkpoints=len(checkpoints),
         num_seeds=len(eval_seeds),
-        episodes_per_seed=int(args.episodes_per_seed),
+        episodes_per_seed=episodes_per_seed,
     )
-    env = build_env(env_name, render_mode=None, config=cfg)
+    env = build_env(env_name, render_mode=None, config=sim_cfg)
 
     dump_test_config(
         run_dir,
-        cfg,
+        sim_cfg,
         hyperparameters={
             "env_name": env_name,
             "method": method,
             "eval_seeds": eval_seeds,
-            "episodes_per_seed": int(args.episodes_per_seed),
+            "episodes_per_seed": episodes_per_seed,
             "device": str(device),
+            "obs_topk": obs_topk,
+            "obs_farest_dist": obs_farest_dist,
+            "nHidden1": nHidden1,
+            "nHidden21": nHidden21,
+            "nHidden22": nHidden22,
+            "alpha_hidden1": alpha_hidden1,
+            "alpha_hidden2": alpha_hidden2,
         },
         extra={
             "script": "eval/eval_batch.py",
@@ -458,6 +382,9 @@ def main():
             PolicyClass = get_rl_policy_class(method)
             act_dim = env.action_space.shape[0]
             needs_qp_relative = _resolve_needs_qp_relative(method)
+            env_obs_dim = int(env.observation_space.shape[0])
+            actor_obs_dim = int(polar_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
+            qp_obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk)) if needs_qp_relative else None
 
             for ckpt_idx, ckpt in enumerate(checkpoints):
                 ckpt_path = ckpt["path"]
@@ -476,28 +403,42 @@ def main():
                 state = torch.load(ckpt_path, map_location=device)
                 if isinstance(state, dict) and isinstance(state.get("state_dict"), dict):
                     state = state["state_dict"]
-                actor_obs_dim = _extract_actor_obs_dim_from_state_dict(state)
-                obs_topk = _infer_obs_topk_from_actor_dim(actor_obs_dim)
-                qp_obs_dim = (6 + 6 * int(obs_topk)) if needs_qp_relative else None
-                policy_kwargs = _policy_kwargs_from_config(cfg, method, qp_obs_dim=qp_obs_dim)
-                policy = PolicyClass(actor_obs_dim, act_dim, **policy_kwargs).to(device)
+                policy_kwargs = build_eval_policy_kwargs(
+                    sim_cfg,
+                    method,
+                    qp_obs_dim=qp_obs_dim,
+                    nHidden1=nHidden1,
+                    nHidden21=nHidden21,
+                    nHidden22=nHidden22,
+                    alpha_hidden1=alpha_hidden1,
+                    alpha_hidden2=alpha_hidden2,
+                )
+                policy = PolicyClass(
+                    actor_obs_dim,
+                    act_dim,
+                    **filter_policy_kwargs(PolicyClass, policy_kwargs),
+                ).to(device)
                 policy.load_state_dict(state)
                 policy.eval()
                 actor = RLEvalActorAdapter(policy, env.action_space, device)
+                obs_preprocess_fn = build_obs_preprocess_fn(
+                    obs_topk=obs_topk,
+                    obs_farest_dist=obs_farest_dist,
+                    needs_qp_relative=needs_qp_relative,
+                )
 
                 per_seed, agg = _evaluate_over_seeds(
                     actor=actor,
                     env=env,
                     eval_seeds=eval_seeds,
-                    episodes_per_seed=args.episodes_per_seed,
-                    obs_topk=obs_topk,
-                    obs_farest_dist=DEFAULT_OBS_FAREST_DIST,
-                    needs_qp_relative=needs_qp_relative,
+                    episodes_per_seed=episodes_per_seed,
+                    obs_preprocess_fn=obs_preprocess_fn,
                 )
                 row["totals"] = agg["totals"]
                 row["aggregate"] = agg["aggregate"]
                 row["per_seed"] = per_seed
-                row["obs_topk"] = int(obs_topk)
+                row["obs_topk"] = obs_topk
+                row["obs_farest_dist"] = obs_farest_dist
                 row["needs_qp_relative"] = bool(needs_qp_relative)
 
                 print(
@@ -517,15 +458,13 @@ def main():
             }
             from controller.robot_controller_factory import build_robot_controller
 
-            actor = build_robot_controller(method, cfg, env)
+            actor = build_robot_controller(method, sim_cfg, env)
             per_seed, agg = _evaluate_over_seeds(
                 actor=actor,
                 env=env,
                 eval_seeds=eval_seeds,
-                episodes_per_seed=args.episodes_per_seed,
-                obs_topk=5,
-                obs_farest_dist=DEFAULT_OBS_FAREST_DIST,
-                needs_qp_relative=False,
+                episodes_per_seed=episodes_per_seed,
+                obs_preprocess_fn=None,
             )
             row["totals"] = agg["totals"]
             row["aggregate"] = agg["aggregate"]
@@ -550,7 +489,7 @@ def main():
         "config_source": "config.py",
         "device": str(device),
         "eval_seeds": eval_seeds,
-        "episodes_per_seed": int(args.episodes_per_seed),
+        "episodes_per_seed": episodes_per_seed,
         "num_checkpoints": len(checkpoints),
         "best_checkpoint": best,
         "checkpoints": results,
@@ -571,5 +510,14 @@ def main():
         print("No valid checkpoint result (all failed).")
 
 
+@hydra.main(
+    config_path=os.path.join(MAIN_DIR, "config"),
+    config_name="eval_batch",
+    version_base=None,
+)
+def hydra_main(cfg: DictConfig):
+    main(cfg)
+
+
 if __name__ == "__main__":
-    main()
+    hydra_main()

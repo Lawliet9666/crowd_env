@@ -53,21 +53,28 @@ def resolve_episode_seed(base_seed, episode_index):
     return int(base_seed) + int(episode_index)
 
 
-def _preprocess_obs(obs, obs_topk=5, obs_farest_dist=5.0, needs_qp_relative=False):
-    obs_polar = absolute_obs_to_polar(obs, topk=obs_topk, farest_dist=obs_farest_dist)
-    if not bool(needs_qp_relative):
-        return obs_polar
-    obs_rel = absolute_obs_to_relative(obs, topk=obs_topk)
-    return (obs_polar, obs_rel)
+def build_obs_preprocess_fn(obs_topk=5, obs_farest_dist=5.0, needs_qp_relative=False):
+    topk = int(obs_topk)
+    farest_dist = float(obs_farest_dist)
+    use_qp_relative = bool(needs_qp_relative)
+
+    def _preprocess(obs):
+        obs_polar = absolute_obs_to_polar(obs, topk=topk, farest_dist=farest_dist)
+        if not use_qp_relative:
+            return obs_polar
+        obs_rel = absolute_obs_to_relative(obs, topk=topk)
+        return (obs_polar, obs_rel)
+
+    return _preprocess
 
 
-def _compute_action(actor, obs, obs_topk=5, obs_farest_dist=5.0, needs_qp_relative=False):
-    obs = _preprocess_obs(
-        obs,
-        obs_topk=obs_topk,
-        obs_farest_dist=obs_farest_dist,
-        needs_qp_relative=needs_qp_relative,
-    )
+def _compute_action(
+    actor,
+    obs,
+    obs_preprocess_fn=None,
+):
+    if obs_preprocess_fn is not None:
+        obs = obs_preprocess_fn(obs)
     if hasattr(actor, "deterministic"):
         actor.deterministic = True
     out = actor.get_action(obs)
@@ -317,9 +324,7 @@ def run_one_episode(
     track_signals=False,
     unom_holder=None,
     collect_frames=False,
-    obs_topk=5,
-    obs_farest_dist=5.0,
-    needs_qp_relative=False,
+    obs_preprocess_fn=None,
 ):
     """Run a single episode and return step-level and episode-level results."""
     if seed is None and reset_options is None:
@@ -336,7 +341,7 @@ def run_one_episode(
     ep_timeout = False
     ep_infeasible = False
 
-    frames = [] if collect_frames else []
+    frames = []
     metrics = _init_metrics(track_signals)
 
     while not done:
@@ -348,9 +353,7 @@ def run_one_episode(
         action = _compute_action(
             actor,
             obs,
-            obs_topk=obs_topk,
-            obs_farest_dist=obs_farest_dist,
-            needs_qp_relative=needs_qp_relative,
+            obs_preprocess_fn=obs_preprocess_fn,
         )
         _record_actor_metrics(metrics, actor, action, unom_holder)
         if bool(getattr(actor, "infeasible", False)):
@@ -387,9 +390,7 @@ def eval_policy(
     save_path=None,
     base_seed=None,
     method=None,
-    obs_topk=5,
-    obs_farest_dist=5.0,
-    needs_qp_relative=False,
+    obs_preprocess_fn=None,
     visualize_episodes=20,
 ):
     total_episodes = 0
@@ -417,9 +418,7 @@ def eval_policy(
                 track_signals=track_signals,
                 unom_holder=unom_holder,
                 collect_frames=True,
-                obs_topk=obs_topk,
-                obs_farest_dist=obs_farest_dist,
-                needs_qp_relative=needs_qp_relative,
+                obs_preprocess_fn=obs_preprocess_fn,
             )
             ep_len = result["ep_len"]
             ep_ret = result["ep_ret"]
@@ -496,9 +495,6 @@ def eval_policy(
                 "max_episodes": max_episodes,
                 "base_seed": base_seed,
                 "method": mode,
-                "obs_topk": int(obs_topk),
-                "obs_farest_dist": float(obs_farest_dist),
-                "needs_qp_relative": bool(needs_qp_relative),
             },
             "results": summary,
         }
@@ -510,9 +506,7 @@ def run_crossing_scenario(
     policy,
     env,
     save_path=None,
-    obs_topk=5,
-    obs_farest_dist=5.0,
-    needs_qp_relative=False,
+    obs_preprocess_fn=None,
 ):
     actor = policy
     result = run_one_episode(
@@ -523,9 +517,7 @@ def run_crossing_scenario(
         track_signals=False,
         unom_holder=None,
         collect_frames=True,
-        obs_topk=obs_topk,
-        obs_farest_dist=obs_farest_dist,
-        needs_qp_relative=needs_qp_relative,
+        obs_preprocess_fn=obs_preprocess_fn,
     )
     frames = result["frames"]
     is_collision = bool(result["ep_collision"])

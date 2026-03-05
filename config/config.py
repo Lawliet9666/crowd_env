@@ -25,7 +25,7 @@ class Config:
         self.env.name = "social_nav_var_num" # social_nav_var_num social_nav
         self.env.dt = 0.1
         self.env.max_steps = 400
-        self.env.sensing_radius = 20.0
+        self.env.sensing_radius = 15.0
         self.env.max_obstacles_obs = 20
         self.env.normalize_obs = False
         # For pure RL + unicycle only:

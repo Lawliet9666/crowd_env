@@ -10,7 +10,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 
 def run_eval(
     root_dir: Path,
-    actor_model_rel: str,
+    actor_model_path: str,
     method: str,
     robot_type: str,
     obstacle_count: int,
@@ -19,16 +19,11 @@ def run_eval(
     cmd = [
         sys.executable,
         str(root_dir / "eval" / "eval_batch.py"),
-        "--actor_model",
-        actor_model_rel,
-        "--method",
-        method,
-        "--episodes_per_seed",
-        str(episodes_per_seed),
-        "--robot_type",
-        robot_type,
-        "--num_humans",
-        str(obstacle_count),
+        f"actor_model={actor_model_path}",
+        f"method={method}",
+        f"episodes_per_seed={int(episodes_per_seed)}",
+        f"robot_type={robot_type}",
+        f"num_humans={int(obstacle_count)}",
     ]
     subprocess.run(cmd, cwd=str(root_dir), check=True)
 
@@ -45,9 +40,6 @@ def evaluate_one_scenario(
     rl_source_by_method: dict,
 ):
     scenario = f"{robot_type}_obs_{obstacle_count}"
-    # eval_batch.py resolves run_dir as trained_models/<actor_model>.
-    # So actor_model should be "compare/<scenario>/<method>".
-    base_rel = f"compare/{scenario}"
     base_dir = trained_models_dir / "compare" / scenario
     base_dir.mkdir(parents=True, exist_ok=True)
 
@@ -55,12 +47,12 @@ def evaluate_one_scenario(
     print(f"save_dir={base_dir}")
 
     for method in ctrl_methods:
-        actor_model_rel = f"{base_rel}/{method}"
-        (base_dir / method).mkdir(parents=True, exist_ok=True)
+        method_dir = base_dir / method
+        method_dir.mkdir(parents=True, exist_ok=True)
         print(f"[controller] method={method}")
         run_eval(
             root_dir=root_dir,
-            actor_model_rel=actor_model_rel,
+            actor_model_path=str(method_dir),
             method=method,
             robot_type=robot_type,
             obstacle_count=obstacle_count,
@@ -70,7 +62,6 @@ def evaluate_one_scenario(
     for method in rl_methods:
         src_dir = trained_models_dir / source_model_folder / rl_source_by_method[method]
         src_ckpts = sorted(src_dir.glob("*.pth"))
-        actor_model_rel = f"{base_rel}/{method}"
         dst_dir = base_dir / method
         dst_dir.mkdir(parents=True, exist_ok=True)
 
@@ -84,7 +75,7 @@ def evaluate_one_scenario(
         print(f"[rl] method={method} source={rl_source_by_method[method]}")
         run_eval(
             root_dir=root_dir,
-            actor_model_rel=actor_model_rel,
+            actor_model_path=str(dst_dir),
             method=method,
             robot_type=robot_type,
             obstacle_count=obstacle_count,

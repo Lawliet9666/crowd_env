@@ -4,7 +4,6 @@ Entry point for vectorized PPO/SAC training and testing.
 
 import multiprocessing
 import os
-from argparse import Namespace
 from datetime import datetime
 
 import hydra
@@ -48,8 +47,20 @@ def make_env_fn(config, env_name):
     return _init
 
 
-def get_policy_kwargs(method, config=None):
+def get_policy_kwargs(method, cfg: DictConfig | None = None, config=None):
     kwargs = {}
+    if cfg is not None:
+        if "nHidden1" in cfg:
+            kwargs["nHidden1"] = int(cfg.nHidden1)
+        if "nHidden21" in cfg:
+            kwargs["nHidden21"] = int(cfg.nHidden21)
+        if "nHidden22" in cfg:
+            kwargs["nHidden22"] = int(cfg.nHidden22)
+        if "alpha_hidden1" in cfg:
+            kwargs["alpha_hidden1"] = int(cfg.alpha_hidden1)
+        if "alpha_hidden2" in cfg:
+            kwargs["alpha_hidden2"] = int(cfg.alpha_hidden2)
+
     cvar_methods = {"rlcvarbetaradius", "rlcvarbetaradius_2nets"}
     if config is not None and method in cvar_methods:
         gmm_cfg = dict(config.human.get("gmm", {}))
@@ -66,10 +77,10 @@ def get_policy_kwargs(method, config=None):
 
 
 
-def build_train_exp_name(args, config, num_envs):
-    base = str(getattr(args, "run_name", "") or "").strip()
+def build_train_exp_name(cfg: DictConfig, config, num_envs):
+    base = str(cfg.get("run_name", "") or "").strip()
     if not base:
-        actor_model = str(getattr(args, "actor_model", "") or "").strip()
+        actor_model = str(cfg.get("actor_model", "") or "").strip()
         actor_file = os.path.basename(actor_model)
         parent_name = os.path.basename(os.path.dirname(os.path.abspath(actor_model))) if actor_model else ""
         if actor_file.startswith("bc_actor") and parent_name:
@@ -77,24 +88,27 @@ def build_train_exp_name(args, config, num_envs):
         else:
             base = datetime.now().strftime("%Y%m%d_%H%M%S")
     robot_type = str(config.robot["type"])
-    method = str(args.method)
-    algo = str(args.algo).lower().strip()
+    method = str(cfg.method)
+    algo = str(cfg.algo).lower().strip()
 
     if algo == "sac":
         name = (
             f"{base}-{robot_type}-{method}-sac-"
-            f"bs{int(args.sac_batch_size)}-a{args.sac_alpha}-"
-            f"up{int(args.sac_updates_per_step)}-env{int(num_envs)}"
+            f"bs{int(cfg.sac_batch_size)}-a{cfg.sac_alpha}-"
+            f"up{int(cfg.sac_updates_per_step)}-k{int(cfg.obs_topk)}-env{int(num_envs)}"
         )
-        if bool(args.sac_auto_alpha):
+        if bool(cfg.sac_auto_alpha):
             name += "-auto"
         return name
 
+    mb_size = float(int(cfg.timesteps_per_batch)) / float(max(1, int(cfg.num_minibatches)))
+    mb_size_str = str(int(round(mb_size))) if abs(mb_size - round(mb_size)) < 1e-9 else f"{mb_size:g}"
+
     name = (
         f"{base}-{robot_type}-{method}-ppo-"
-        f"bs{int(args.timesteps_per_batch)}-ep{int(args.n_updates_per_iteration)}-"
-        f"clip{float(args.clip):g}-"
-        f"ent{float(args.ent_coef):g}-mb{int(args.num_minibatches)}-env{int(num_envs)}"
+        f"bs{int(cfg.timesteps_per_batch)}-ep{int(cfg.n_updates_per_iteration)}-"
+        f"mbsz{mb_size_str}-"
+        f"k{int(cfg.obs_topk)}-env{int(num_envs)}"
     )
     return name
 
@@ -120,70 +134,73 @@ def train(env, num_envs, algo, hyperparameters, actor_model, critic_model, metho
     model.learn(total_timesteps=total_timesteps)
 
 
-def main(args):
-    set_global_seeds(args.seed)
+def main(cfg: DictConfig):
+    set_global_seeds(int(cfg.seed))
 
-    device = select_device(args.device)
+    device = select_device(str(cfg.device))
 
-    needs_qp_relative = resolve_needs_qp_relative(args.method)
+    needs_qp_relative = resolve_needs_qp_relative(str(cfg.method))
     print(
-        f"Observation pipeline: actor/critic=polar, qp_relative={needs_qp_relative} (method={args.method})",
+        f"Observation pipeline: actor/critic=polar, qp_relative={needs_qp_relative} (method={cfg.method})",
         flush=True,
     )
 
     config = Config()
-    # config.env.rl_xy_to_unicycle = bool(args.method == "rl" and config.robot.type == "unicycle")
+    # config.env.rl_xy_to_unicycle = bool(cfg.method == "rl" and config.robot.type == "unicycle")
     env_name = config.env.get("name", "social_nav_var_num")
-    num_envs = int(args.num_envs) if int(args.num_envs) > 0 else max(1, multiprocessing.cpu_count())
-    print(f"Requested num_envs={args.num_envs}; using num_envs={num_envs}", flush=True)
+    num_envs = int(cfg.num_envs) if int(cfg.num_envs) > 0 else max(1, multiprocessing.cpu_count())
+    print(f"Requested num_envs={cfg.num_envs}; using num_envs={num_envs}", flush=True)
 
-    train_root = os.path.join(".", "trained_models", args.model_folder)
-    exp_name = build_train_exp_name(args, config, num_envs)
+    train_root = os.path.join(".", "trained_models", str(cfg.model_folder))
+    exp_name = build_train_exp_name(cfg, config, num_envs)
     exp_name = ensure_unique_exp_name(train_root, exp_name)
     save_dir = os.path.join(train_root, exp_name)
 
     base_hyperparameters = build_base_hyperparameters(
-        args=args,
+        cfg=cfg,
         config=config,
         env_name=env_name,
         save_dir=save_dir,
         device=device,
         needs_qp_relative=needs_qp_relative,
-        eval_seed=(args.seed if args.eval_seed is None else args.eval_seed),
+        eval_seed=(cfg.seed if cfg.eval_seed is None else cfg.eval_seed),
         include_gamma=False,
         include_controller=True,
     )
-    if args.algo == "sac":
-        hyperparameters = build_sac_hyperparameters(args, base_hyperparameters)
+    if str(cfg.algo) == "sac":
+        hyperparameters = build_sac_hyperparameters(cfg, base_hyperparameters)
     else:
-        hyperparameters = build_ppo_hyperparameters(args, base_hyperparameters)
+        hyperparameters = build_ppo_hyperparameters(cfg, base_hyperparameters)
 
-    hyperparameters["policy_kwargs"] = get_policy_kwargs(args.method, config=config)
+    hyperparameters["policy_kwargs"] = get_policy_kwargs(str(cfg.method), cfg=cfg, config=config)
 
     os.makedirs(save_dir, exist_ok=True)
+    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+    if isinstance(cfg_dict, dict):
+        cfg_dict.pop("hydra", None)
     dump_train_config(
         save_dir,
-        args,
+        cfg_dict,
         config,
         hyperparameters,
         extra={
-            "seed": args.seed,
-            "eval_seed": args.eval_seed,
-            "method": args.method,
-            "algo": args.algo,
+            "seed": int(cfg.seed),
+            "eval_seed": cfg.eval_seed,
+            "method": str(cfg.method),
+            "algo": str(cfg.algo),
         },
     )
     print(f"Models will be saved to: {save_dir}", flush=True)
-    wandb.init(project=f"rl_adaptive_cvar_cbf_{args.algo}", name=exp_name, config=hyperparameters)
+    wandb.init(project=f"rl_adaptive_cvar_cbf_{cfg.algo}", name=exp_name, config=hyperparameters)
 
     env_fns = [make_env_fn(config, env_name) for _ in range(num_envs)]
     vec_env = AsyncVectorEnv(env_fns)
     eval_env = None
 
-    if args.algo == "ppo" and args.eval_freq_timesteps > 0 and args.eval_episodes > 0:
+    if str(cfg.algo) == "ppo" and int(cfg.eval_freq_timesteps) > 0 and int(cfg.eval_episodes) > 0:
         eval_env = build_env(env_name, render_mode=None, config=config)
         hyperparameters["eval_env"] = eval_env
-    if args.algo == "sac" and args.sac_eval_freq_episodes > 0 and args.sac_eval_episodes > 0:
+    if str(cfg.algo) == "sac" and int(cfg.sac_eval_freq_episodes) > 0 and int(cfg.sac_eval_episodes) > 0:
         eval_env = build_env(env_name, render_mode=None, config=config)
         hyperparameters["eval_env"] = eval_env
 
@@ -191,25 +208,17 @@ def main(args):
         train(
             env=vec_env,
             num_envs=num_envs,
-            algo=args.algo,
+            algo=str(cfg.algo),
             hyperparameters=hyperparameters,
-            actor_model=args.actor_model,
-            critic_model=args.critic_model,
-            method=args.method,
-            total_timesteps=args.total_timesteps,
+            actor_model=str(cfg.actor_model),
+            critic_model=str(cfg.critic_model),
+            method=str(cfg.method),
+            total_timesteps=int(cfg.total_timesteps),
         )
     finally:
         vec_env.close()
         if eval_env is not None and hasattr(eval_env, "close"):
             eval_env.close()
-
-
-def _to_main_vec_args(cfg: DictConfig) -> Namespace:
-    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
-    if not isinstance(cfg_dict, dict):
-        raise TypeError("Hydra config must resolve to a flat dict for main_vec.")
-    cfg_dict.pop("hydra", None)
-    return Namespace(**cfg_dict)
 
 
 @hydra.main(
@@ -218,8 +227,7 @@ def _to_main_vec_args(cfg: DictConfig) -> Namespace:
     version_base=None,
 )
 def hydra_main(cfg: DictConfig):
-    args = _to_main_vec_args(cfg)
-    main(args)
+    main(cfg)
 
 
 if __name__ == "__main__":

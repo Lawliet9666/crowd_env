@@ -54,7 +54,7 @@ A good config example is `runs/SACabl-crowdsim-silu-env8-sac_base-bs128-a0.001-a
 
 ## test
 ```
-python eval/eval_batch.py --actor_model <run_name> --episodes_per_seed 50
+python eval/eval_batch.py actor_model=trained_models/<run_name> episodes_per_seed=50
 ```
 
 
@@ -170,7 +170,6 @@ For `rlcbfgamma*` and `rlcvarbetaradius*`, the QP layer additionally consumes an
 
 Training entrypoint is Hydra-native:
 - `main_vec.py` (vectorized, PPO or SAC)
-- Train-only (no `mode` argument).
 
 Print resolved config:
 
@@ -199,7 +198,7 @@ python main_vec.py trainer=sac method=rl \
 
 ## Evaluation
 
-All evaluation scripts default to CPU. `eval/eval_test.py` is CPU-only.
+All evaluation scripts default to CPU. 
 
 ### A) Single-checkpoint visual/metric test (`eval/eval_test.py`)
 
@@ -211,13 +210,16 @@ python eval/eval_test.py \
   actor_model=trained_models/default/20260303_160118_unicycle_rlcbfgamma_ppo/ppo_actor_best.pth \
   test_mode=both \
   test_ep=100 \
-  test_viz_ep=50 \
-  eval_seed=100
+  test_viz_ep=10 \
+  eval_seed=100 \
+  obs_topk=1
 ```
 
 - `test_mode=eval`: batch episode evaluation.
 - `test_mode=crossing`: fixed crossing scenario visualization.
 - `test_mode=both`: run both.
+- If `save_path` is empty, outputs go to `<dirname(actor_model)>/<robot_type>_obs_<obstacle_count>_vmax_<vmax>_omegamax_<omega_max>/`.
+- Output files include `eval_ep_<ep>_succ_<0|1>_coll_<0|1>.gif`, `crossing.gif`, and `eval_log.json`.
 
 
 ### B) Batch eval for all actor checkpoints (`eval/eval_batch.py`)
@@ -226,13 +228,17 @@ Use this to evaluate all actor checkpoints under one run folder with fixed seeds
 
 ```bash
 python eval/eval_batch.py \
-  --actor_model 20260227_111328_unicycle_rl_ppo \
-  --episodes_per_seed 50
+  actor_model=trained_models/default/20260227_111328_unicycle_rl_ppo \
+  episodes_per_seed=50
 ```
 
+- Hydra entrypoint (`key=value` overrides, not `--flag` style).
 - Evaluates every `*actor*.pth` checkpoint in the folder.
 - Uses fixed multi-seed rollout (`FIXED_EVAL_SEEDS` default).
-- Writes `checkpoint_eval_all_multiseed.json`.
+- `actor_model` is the run directory path.
+- Optional overrides: `method`, `robot_type`, `num_humans`, `obs_topk`, `obs_farest_dist`,
+  `nHidden1`, `nHidden21`, `nHidden22`, `alpha_hidden1`, `alpha_hidden2`.
+- Output files include `test_config.json` and `checkpoint_eval_all_multiseed.json`.
 
 ### C) Scenario matrix compare (`eval/run_eval_compare.py`)
 
@@ -244,7 +250,8 @@ python eval/run_eval_compare.py
 
 - Iterates scenario grid configured in the script.
 - Calls `eval/eval_batch.py` per method/scenario.
-- Saves outputs under `trained_models/compare/<scenario>/<method>/`.
+- Saves outputs under `trained_models/compare/<robot_type>_obs_<obstacle_count>/<method>/`.
+- Per-method files are produced by `eval/eval_batch.py` (`test_config.json`, `checkpoint_eval_all_multiseed.json`).
 
 ### D) Seed-advantage GIF analysis (`eval/run_compare_seed_advantage_gifs.py`)
 
@@ -252,15 +259,19 @@ Use this to find seeds where one target method clearly outperforms others and ex
 
 ```bash
 python eval/run_compare_seed_advantage_gifs.py \
-  --seed 100 \
-  --target_method rlcvarbetaradius \
-  --robot_type unicycle \
-  --obstacle_number 25
+  seed=100 \
+  target_method=rlcvarbetaradius \
+  robot_type=unicycle \
+  obstacle_number=25
 ```
 
+- Hydra entrypoint (`key=value` overrides, not `--flag` style).
 - Evaluates seeds in `[seed, seed + 99]`.
 - Finds seeds where target succeeds and all other compared methods fail.
 - Exports per-method gifs for matched seeds.
+- If `out_dir` is empty, output root is `<compare_root>/<robot_type>_obs_<obstacle_number>/seed_<start>_<end>/`.
+- Matched-seed gifs are saved as `seed_<seed>/<method>_seed_<seed>_succ_<0|1>_coll_<0|1>.gif`.
+- Summary file is `<scenario>_seed_<start>_<end>_advantage_summary.json`.
 
 ### E) Compare-result summary report (`eval/analyze_compare_results.py`)
 
@@ -276,6 +287,7 @@ python eval/analyze_compare_results.py \
 - Writes `summary_compare_metrics.csv` and `summary_compare_report.md`.
 - Writes success-rate plots like `success_rate_vs_obstacles_<robot_type>.png`.
 - Writes radar outputs `radar_metrics_summary.csv` and `radar_metrics_<robot_type>.png`.
+- If `--out_dir` is empty, outputs are written into `--compare_root`.
 
 ## Hydra Overrides
 

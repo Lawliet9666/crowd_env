@@ -1,10 +1,8 @@
 """Hydra entrypoint for single-checkpoint test/evaluation."""
 
-import inspect
 import os
 import sys
 from argparse import Namespace
-from datetime import datetime
 from pathlib import Path
 
 import hydra
@@ -19,7 +17,13 @@ from config.config import Config
 from crowd_nav.rl_policy_factory import get_rl_policy_class
 from crowd_sim.utils import build_env
 from crowd_sim.utils import polar_obs_dim_from_env_dim, relative_obs_dim_from_env_dim
-from eval.eval_util import RLEvalActorAdapter, eval_policy, run_crossing_scenario
+from eval.policy_kwargs import build_eval_policy_kwargs, filter_policy_kwargs
+from eval.eval_util import (
+    RLEvalActorAdapter,
+    build_obs_preprocess_fn,
+    eval_policy,
+    run_crossing_scenario,
+)
 
 METHOD_NEEDS_QP_RELATIVE = {
     "rlcbfgamma": True,
@@ -32,27 +36,22 @@ METHOD_NEEDS_QP_RELATIVE = {
 MAIN_DIR = str(ROOT_DIR)
 
 
-def _resolve_eval_save_path(actor_model: str, save_path: str | None) -> str:
+def _resolve_eval_save_path(actor_model: str, save_path: str | None, cfg: Config) -> str:
     if save_path is not None and str(save_path).strip():
         return str(save_path)
     actor_dir = os.path.dirname(os.path.abspath(actor_model))
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return os.path.join(actor_dir, ts)
-
-
-def _filter_policy_kwargs(policy_class, policy_kwargs):
-    kwargs = dict(policy_kwargs or {})
-    try:
-        sig = inspect.signature(policy_class.__init__)
-        accepted = set(sig.parameters.keys())
-        return {k: v for k, v in kwargs.items() if k in accepted}
-    except (TypeError, ValueError):
-        return {}
+    robot_type = str(cfg.robot.get("type", "robot"))
+    obstacle_count = int(cfg.human.get("num_humans", 0))
+    vmax = float(cfg.robot.get("vmax", 0.0))
+    omega_max = float(cfg.robot.get("omega_max", 0.0))
+    folder = f"{robot_type}_obs_{obstacle_count}_vmax_{vmax:g}_omegamax_{omega_max:g}"
+    return os.path.join(actor_dir, folder)
 
 
 def run_policy_test(
     env,
     actor_model,
+    cfg,
     device,
     method,
     policy_kwargs=None,
@@ -77,7 +76,10 @@ def run_policy_test(
     else:
         print(f"Policy: {policy_class.__name__}", flush=True)
 
-    filtered_policy_kwargs = _filter_policy_kwargs(policy_class, policy_kwargs)
+    state = torch.load(actor_model, map_location=device)
+    if isinstance(state, dict) and isinstance(state.get("state_dict"), dict):
+        state = state["state_dict"]
+    filtered_policy_kwargs = filter_policy_kwargs(policy_class, policy_kwargs)
     env_obs_dim = int(env.observation_space.shape[0])
     obs_dim = int(polar_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
     qp_obs_dim = int(relative_obs_dim_from_env_dim(env_obs_dim, topk=obs_topk))
@@ -88,11 +90,16 @@ def run_policy_test(
 
     print(f"Policy Args: {filtered_policy_kwargs}", flush=True)
     policy = policy_class(obs_dim, act_dim, **filtered_policy_kwargs).to(device)
-    policy.load_state_dict(torch.load(actor_model, map_location=device))
+    policy.load_state_dict(state)
     policy.eval()
 
     actor = RLEvalActorAdapter(policy, env.action_space, device)
-    save_path = _resolve_eval_save_path(actor_model, save_path)
+    save_path = _resolve_eval_save_path(actor_model, save_path, cfg=cfg)
+    obs_preprocess_fn = build_obs_preprocess_fn(
+        obs_topk=int(obs_topk),
+        obs_farest_dist=float(obs_farest_dist),
+        needs_qp_relative=bool(needs_qp_relative),
+    )
 
     mode = str(test_mode).lower().strip()
     if mode in ("eval", "both"):
@@ -103,9 +110,7 @@ def run_policy_test(
             save_path=save_path,
             base_seed=base_seed,
             method=method,
-            obs_topk=int(obs_topk),
-            obs_farest_dist=float(obs_farest_dist),
-            needs_qp_relative=bool(needs_qp_relative),
+            obs_preprocess_fn=obs_preprocess_fn,
             visualize_episodes=int(test_viz_episodes),
         )
 
@@ -114,28 +119,8 @@ def run_policy_test(
             actor,
             env,
             save_path=save_path,
-            obs_topk=int(obs_topk),
-            obs_farest_dist=float(obs_farest_dist),
-            needs_qp_relative=bool(needs_qp_relative),
+            obs_preprocess_fn=obs_preprocess_fn,
         )
-
-
-def _build_policy_kwargs_from_config(cfg, method):
-    gmm_cfg = dict(cfg.human.get("gmm", {}))
-    kwargs = {
-        "robot_type": cfg.robot["type"],
-        "safe_dist": cfg.controller["safety_margin"] + cfg.human["radius"] + cfg.robot["radius"],
-        "alpha": cfg.controller["cbf_alpha"],
-        "beta": cfg.controller["cvar_beta"],
-        "vmax": cfg.robot["vmax"],
-        "amax": cfg.robot["amax"],
-        "omega_max": cfg.robot["omega_max"],
-    }
-    if str(method).strip().lower() in ("rlcvarbetaradius", "rlcvarbetaradius_2nets"):
-        kwargs["gmm_weights"] = gmm_cfg.get("weights")
-        kwargs["gmm_stds"] = gmm_cfg.get("stds")
-        kwargs["gmm_lateral_ratio"] = gmm_cfg.get("lateral_ratio", 0.3)
-    return kwargs
 
 
 def main(args):
@@ -163,11 +148,21 @@ def main(args):
             raise ValueError(
                 f"Unsupported test_mode '{args.test_mode}'. Expected one of: eval, crossing, both."
             )
-        policy_kwargs = _build_policy_kwargs_from_config(cfg, args.method)
+        policy_kwargs = build_eval_policy_kwargs(
+            cfg,
+            args.method,
+            nHidden1=int(args.nHidden1),
+            nHidden21=int(args.nHidden21),
+            nHidden22=int(args.nHidden22),
+            alpha_hidden1=int(args.alpha_hidden1),
+            alpha_hidden2=int(args.alpha_hidden2),
+            qp_obs_dim=None,
+        )
         device = torch.device("cpu")
         run_policy_test(
             env=env,
             actor_model=args.actor_model,
+            cfg=cfg,
             device=device,
             method=args.method,
             policy_kwargs=policy_kwargs,

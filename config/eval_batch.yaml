@@ -1,0 +1,15 @@
+# Dedicated Hydra config for eval/eval_batch.py.
+defaults:
+  - env: crowdsim
+  - model: default
+  - _self_
+
+actor_model: ???
+method: rl
+episodes_per_seed: 50
+robot_type: ""
+num_humans: null
+
+hydra:
+  job:
+    chdir: false
