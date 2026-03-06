@@ -88,12 +88,23 @@ def get_policy_kwargs(method, cfg: DictConfig | None = None, config=None):
 
     if method_key in safety_methods:
         kwargs["nHidden22"] = int(cfg.nHidden22)
+        kwargs["annealing_learning_alpha"] = bool(cfg.annealing_learning_alpha)
+        kwargs["anneal_end_timesteps"] = int(cfg.anneal_end_timesteps)
+        if cfg.alpha_anneal_range is not None:
+            kwargs["alpha_anneal_range"] = [float(v) for v in list(cfg.alpha_anneal_range)]
 
     if method_key in two_net_methods:
         kwargs["alpha_hidden1"] = int(cfg.alpha_hidden1)
         kwargs["alpha_hidden2"] = int(cfg.alpha_hidden2)
 
     if config is not None and method_key in cvar_methods:
+        kwargs["annealing_learning_beta"] = bool(cfg.annealing_learning_beta)
+        kwargs["annealing_learning_radius"] = bool(cfg.annealing_learning_radius)
+        kwargs["anneal_end_timesteps"] = int(cfg.anneal_end_timesteps)
+        if cfg.beta_anneal_range is not None:
+            kwargs["beta_anneal_range"] = [float(v) for v in list(cfg.beta_anneal_range)]
+        if cfg.radius_scale_anneal_range is not None:
+            kwargs["radius_scale_anneal_range"] = [float(v) for v in list(cfg.radius_scale_anneal_range)]
         gmm_cfg = dict(config.human.get("gmm", {}))
         kwargs.update(
             {

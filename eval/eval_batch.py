@@ -51,6 +51,16 @@ METHOD_NEEDS_QP_RELATIVE = {
     "rlcvarbetaradiusalpha_2nets_risk": True,
 }
 
+ANNEAL_PARAM_KEYS = (
+    "annealing_learning_alpha",
+    "annealing_learning_beta",
+    "annealing_learning_radius",
+    "anneal_end_timesteps",
+    "alpha_anneal_range",
+    "beta_anneal_range",
+    "radius_scale_anneal_range",
+)
+
 
 def _resolve_needs_qp_relative(method: str) -> bool:
     return bool(METHOD_NEEDS_QP_RELATIVE.get(str(method).strip().lower(), False))
@@ -312,6 +322,9 @@ def main(cfg: DictConfig):
     device = torch.device("cpu")
 
     sim_cfg = Config()
+    for key in ANNEAL_PARAM_KEYS:
+        if key in cfg:
+            setattr(sim_cfg, key, cfg[key])
     robot_type = cfg.get("robot_type", None)
     if robot_type is not None and str(robot_type).strip() != "":
         sim_cfg.robot.type = str(robot_type).strip()

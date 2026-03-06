@@ -63,6 +63,16 @@ METHOD_NEEDS_QP_RELATIVE = {
     "rlcvarbetaradiusalpha_2nets_risk": True,
 }
 
+ANNEAL_PARAM_KEYS = (
+    "annealing_learning_alpha",
+    "annealing_learning_beta",
+    "annealing_learning_radius",
+    "anneal_end_timesteps",
+    "alpha_anneal_range",
+    "beta_anneal_range",
+    "radius_scale_anneal_range",
+)
+
 
 def _resolve_needs_qp_relative(method: str) -> bool:
     return bool(METHOD_NEEDS_QP_RELATIVE.get(str(method).strip().lower(), False))
@@ -405,6 +415,9 @@ def main(cfg: DictConfig) -> None:
         raise RuntimeError(f"No method directories found in: {scenario_dir}")
 
     scenario_cfg, env_name = build_scenario_config(scenario_dir)
+    for key in ANNEAL_PARAM_KEYS:
+        if key in cfg:
+            setattr(scenario_cfg, key, cfg[key])
 
     print(f"[Config] compare_root={compare_root}")
     print(f"[Config] scenario={scenario_name}, env={env_name}, methods={methods}")

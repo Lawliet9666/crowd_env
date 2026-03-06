@@ -68,7 +68,7 @@ class BarrierNet(BarrierNetV1):
         # alpha from relative QP observation branch
         xa = F.silu(self.alpha_fc1(obs_qp))
         xa = F.silu(self.alpha_fc2(xa))
-        alpha = self.alpha_max * torch.sigmoid(self.alpha_out(xa)).squeeze(-1)
+        alpha = self._map_alpha_from_sigmoid(self.alpha_out(xa), default_max=self.alpha_max)
         self.last_alpha = alpha
 
         # Warmup phase: bypass QP during training.

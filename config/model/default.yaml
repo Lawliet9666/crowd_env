@@ -13,3 +13,21 @@ nHidden22: 256
 # Separate safety-head MLP hidden sizes for 2nets variants.
 alpha_hidden1: 128
 alpha_hidden2: 64
+
+# Optional annealing for learned safety heads (applies to safety methods only).
+annealing_learning_alpha: false
+annealing_learning_beta: false
+annealing_learning_radius: false
+anneal_end_timesteps: 1000000
+
+# Compact range schedules:
+# alpha_anneal_range: [min_start, max_start, min_end]
+#   - alpha max at end is taken from network alpha_max.
+# beta_anneal_range: [min_start, max_start, min_end]
+#   - beta max at end is taken from network beta (self.beta).
+# radius_scale_anneal_range: [min_start, max_start, min_end]
+#   - radius max at end is taken as 2 * safe_dist.
+alpha_anneal_range: [0.1, 1.0, 0.0]
+beta_anneal_range: [0.05, 0.20, 0.01]
+# Tuned for your current safe_dist~0.75 setting; adjust if safe_dist changes.
+radius_scale_anneal_range: [0.75, 1.05, 0.8]

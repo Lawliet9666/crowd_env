@@ -9,6 +9,19 @@ import numpy as np
 
 
 _CVAR_METHODS = {
+    "rlcvar",
+    "rlcvarbetaradius",
+    "rlcvarbetaradius_2nets",
+    "rlcvarbetaradius_2nets_risk",
+    "rlcvarbetaradiusalpha_2nets",
+    "rlcvarbetaradiusalpha_2nets_risk",
+}
+
+_SAFETY_METHODS = {
+    "rlcbfgamma",
+    "rlcbfgamma_2nets",
+    "rlcbfgamma_2nets_risk",
+    "rlcvar",
     "rlcvarbetaradius",
     "rlcvarbetaradius_2nets",
     "rlcvarbetaradius_2nets_risk",
@@ -24,6 +37,12 @@ def _radius_scalar(v: Any) -> float:
             return 0.0
         return float(np.max(arr))
     return float(v)
+
+
+def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:
+    if isinstance(cfg, dict):
+        return cfg.get(key, default)
+    return getattr(cfg, key, default)
 
 
 def build_eval_policy_kwargs(
@@ -58,7 +77,23 @@ def build_eval_policy_kwargs(
     }
 
     method_key = str(method).strip().lower()
+    if method_key in _SAFETY_METHODS:
+        kwargs["annealing_learning_alpha"] = bool(_cfg_get(cfg, "annealing_learning_alpha", False))
+        kwargs["anneal_end_timesteps"] = int(_cfg_get(cfg, "anneal_end_timesteps", 1_000_000))
+        alpha_range = _cfg_get(cfg, "alpha_anneal_range", None)
+        if alpha_range is not None:
+            kwargs["alpha_anneal_range"] = [float(v) for v in list(alpha_range)]
+
     if method_key in _CVAR_METHODS:
+        kwargs["annealing_learning_beta"] = bool(_cfg_get(cfg, "annealing_learning_beta", False))
+        kwargs["annealing_learning_radius"] = bool(_cfg_get(cfg, "annealing_learning_radius", False))
+        kwargs["anneal_end_timesteps"] = int(_cfg_get(cfg, "anneal_end_timesteps", 1_000_000))
+        beta_range = _cfg_get(cfg, "beta_anneal_range", None)
+        radius_range = _cfg_get(cfg, "radius_scale_anneal_range", None)
+        if beta_range is not None:
+            kwargs["beta_anneal_range"] = [float(v) for v in list(beta_range)]
+        if radius_range is not None:
+            kwargs["radius_scale_anneal_range"] = [float(v) for v in list(radius_range)]
         gmm_cfg = dict(cfg.human.get("gmm", {}))
         kwargs["gmm_weights"] = gmm_cfg.get("weights")
         kwargs["gmm_stds"] = gmm_cfg.get("stds")

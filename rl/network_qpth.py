@@ -33,10 +33,14 @@ class BarrierNet(nn.Module):
         self.robot_type = robot_type
         self.slack_weight = slack_weight
         self.alpha = alpha
+        self.alpha_max = float(kwargs.get("alpha_max", 4.0))
         self.actor_obs_dim = int(obs_dim)
         self.qp_obs_dim = int(qp_obs_dim)
         self.qp_start_timesteps = max(0, int(qp_start_timesteps))
         self.current_timestep = 0
+        self.anneal_end_timesteps = int(kwargs.get("anneal_end_timesteps", 1_000_000))
+        self.annealing_learning_alpha = bool(kwargs.get("annealing_learning_alpha", False))
+        self.alpha_anneal_range = kwargs.get("alpha_anneal_range", None)
         if self.qp_obs_dim <= 6 or (self.qp_obs_dim - 6) % 6 != 0:
             raise ValueError(
                 f"BarrierNet invalid qp_obs_dim={self.qp_obs_dim}. Expected 6 + 6*K with K>=1."
@@ -77,6 +81,56 @@ class BarrierNet(nn.Module):
     def set_timestep(self, timestep):
         self.current_timestep = max(0, int(timestep))
 
+    @staticmethod
+    def _opt_float(v, default):
+        return float(default) if v is None else float(v)
+
+    def _anneal_progress(self):
+        if not self.training:
+            return 1.0
+        t1 = int(self.anneal_end_timesteps)
+        if t1 <= 0:
+            return 1.0
+        p = float(self.current_timestep) / float(t1)
+        return max(0.0, min(1.0, p))
+
+    def _annealed_bounds(self, *, enabled, default_min, default_max, range_cfg, end_max_from_default=False):
+        if not enabled or range_cfg is None:
+            lo = float(default_min)
+            hi = float(default_max)
+        else:
+            vals = [float(v) for v in list(range_cfg)]
+            if end_max_from_default:
+                if len(vals) == 3:
+                    lo0, hi0, lo1 = vals
+                    hi1 = float(default_max)
+                elif len(vals) == 4:
+                    lo0, hi0, lo1, _ = vals
+                    hi1 = float(default_max)
+                else:
+                    raise ValueError("alpha_anneal_range must have 3 or 4 numbers: [min_start, max_start, min_end, (optional) max_end].")
+            else:
+                if len(vals) != 4:
+                    raise ValueError("Anneal range must have 4 numbers: [min_start, max_start, min_end, max_end].")
+                lo0, hi0, lo1, hi1 = vals
+            p = self._anneal_progress()
+            lo = lo0 + (lo1 - lo0) * p
+            hi = hi0 + (hi1 - hi0) * p
+        if hi <= lo:
+            hi = lo + 1e-6
+        return lo, hi
+
+    def _map_alpha_from_sigmoid(self, alpha_logits, default_max):
+        lo, hi = self._annealed_bounds(
+            enabled=self.annealing_learning_alpha,
+            default_min=0.0,
+            default_max=float(default_max),
+            range_cfg=self.alpha_anneal_range,
+            end_max_from_default=True,
+        )
+        sig = torch.sigmoid(alpha_logits).squeeze(-1)
+        return float(lo) + (float(hi) - float(lo)) * sig
+
     def forward(self, obs_actor, obs_qp=None):
         if isinstance(obs_actor, np.ndarray):
             obs_actor = torch.tensor(obs_actor, dtype=torch.float)
@@ -113,7 +167,7 @@ class BarrierNet(nn.Module):
 
         # x32 = self.fc32(x22) # alpha
         # x32 = 4*nn.Sigmoid()(x32)  # ensure CBF parameters are positive
-        alpha = 4*torch.sigmoid(self.fc32(x22)).squeeze(-1)  # (B,)
+        alpha = self._map_alpha_from_sigmoid(self.fc32(x22), default_max=self.alpha_max)
         self.last_alpha = alpha
 
         # Warmup phase: bypass QP during training.

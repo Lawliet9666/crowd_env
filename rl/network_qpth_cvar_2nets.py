@@ -44,9 +44,12 @@ class BarrierNet(BarrierNetV1):
         xa = F.silu(self.alpha_fc1(obs_qp))
         xa = F.silu(self.alpha_fc2(xa))
 
-        beta = torch.sigmoid(self.beta_out(xa)).squeeze(-1)  # (B,) in [0, 1]
-        r_scale = 1.0 + 1.5 * torch.sigmoid(self.rsafe_out(xa)).squeeze(-1)  # (B,) in [1, 2.5]
-        r_safe_learned = self.safe_dist * r_scale
+        beta = self._map_beta_from_sigmoid(self.beta_out(xa), default_max=self.beta)
+        r_safe_learned = self._map_radius_from_sigmoid(
+            self.rsafe_out(xa),
+            default_min=self.safe_dist,
+            default_max=2.0 * self.safe_dist,
+        )
         return beta, r_safe_learned
 
     def forward(self, obs_actor, obs_qp=None):

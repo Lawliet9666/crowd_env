@@ -38,6 +38,16 @@ METHOD_NEEDS_QP_RELATIVE = {
 
 MAIN_DIR = str(ROOT_DIR)
 
+ANNEAL_PARAM_KEYS = (
+    "annealing_learning_alpha",
+    "annealing_learning_beta",
+    "annealing_learning_radius",
+    "anneal_end_timesteps",
+    "alpha_anneal_range",
+    "beta_anneal_range",
+    "radius_scale_anneal_range",
+)
+
 
 def _resolve_eval_save_path(actor_model: str, save_path: str | None, cfg: Config) -> str:
     if save_path is not None and str(save_path).strip():
@@ -128,6 +138,9 @@ def run_policy_test(
 
 def main(cfg_args: DictConfig):
     sim_cfg = Config()
+    for key in ANNEAL_PARAM_KEYS:
+        if key in cfg_args:
+            setattr(sim_cfg, key, cfg_args[key])
     env_name = sim_cfg.env.get("name", "social_nav_var_num")
     render_mode = "human" if bool(cfg_args.render) else "rgb_array"
     env = build_env(env_name, render_mode=render_mode, config=sim_cfg)
