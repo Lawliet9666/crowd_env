@@ -309,7 +309,7 @@ python eval/analyze_compare_results.py \
 
 ### Common Keys
 
-- `method` (`rl`, `rlcbfgamma`, `rlcbfgamma_2nets`, `rlcbfgamma_2nets_risk`, `rlcvarbetaradius`, `rlcvarbetaradius_2nets`, `rlcvarbetaradius_2nets_risk`)
+- `method` (`rl`, `rlcbfgamma`, `rlcbfgamma_2nets`, `rlcbfgamma_2nets_risk`, `rlcvarbetaradius`, `rlcvarbetaradius_2nets`, `rlcvarbetaradius_2nets_risk`, `rlcvarbetaradiusalpha_2nets`, `rlcvarbetaradiusalpha_2nets_risk`)
 - `actor_model`, `critic_model`
 - `device` (`cuda` or `cpu`)
 - `seed`, `eval_seed`

@@ -32,6 +32,8 @@ METHOD_NEEDS_QP_RELATIVE = {
     "rlcvarbetaradius": True,
     "rlcvarbetaradius_2nets": True,
     "rlcvarbetaradius_2nets_risk": True,
+    "rlcvarbetaradiusalpha_2nets": True,
+    "rlcvarbetaradiusalpha_2nets_risk": True,
 }
 
 
@@ -141,11 +143,14 @@ def main(args):
             "rlcvarbetaradius",
             "rlcvarbetaradius_2nets",
             "rlcvarbetaradius_2nets_risk",
+            "rlcvarbetaradiusalpha_2nets",
+            "rlcvarbetaradiusalpha_2nets_risk",
         ):
             raise ValueError(
                 f"Unsupported method '{args.method}'. "
                 "Expected one of: rl, rlcbfgamma, rlcbfgamma_2nets, rlcbfgamma_2nets_risk, "
-                "rlcvarbetaradius, rlcvarbetaradius_2nets, rlcvarbetaradius_2nets_risk."
+                "rlcvarbetaradius, rlcvarbetaradius_2nets, rlcvarbetaradius_2nets_risk, "
+                "rlcvarbetaradiusalpha_2nets, rlcvarbetaradiusalpha_2nets_risk."
             )
         needs_qp_relative = bool(METHOD_NEEDS_QP_RELATIVE.get(method_key, False))
         test_mode = str(args.test_mode).strip().lower()

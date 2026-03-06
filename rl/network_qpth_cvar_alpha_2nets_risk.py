@@ -15,8 +15,7 @@ class BarrierNet(BarrierNetV1):
     """
     BarrierNet 2nets (CVaR):
     - u_nom from actor input (polar)
-    - beta / r_safe from risk features (derived from relative QP input), via a separate MLP
-    - alpha uses fixed scalar self.alpha
+    - alpha / beta / r_safe from QP input (relative), via a separate MLP
     """
 
     def __init__(
@@ -36,11 +35,12 @@ class BarrierNet(BarrierNetV1):
         self.closing_scale = 2.0
         self.alpha_fc1 = nn.Linear(self.safety_obs_dim, int(alpha_hidden1))
         self.alpha_fc2 = nn.Linear(int(alpha_hidden1), int(alpha_hidden2))
+        self.alpha_out = nn.Linear(int(alpha_hidden2), 1)
         self.beta_out = nn.Linear(int(alpha_hidden2), 1)
         self.rsafe_out = nn.Linear(int(alpha_hidden2), 1)
-        self._unused_alpha_max = float(alpha_max)
+        self.alpha_max = float(alpha_max)
         print(
-            f"[CVaRNet 2nets] alpha=fixed({self.alpha:.3f}), beta/r_safe_from=risk_features(qp)",
+            f"[CVaRNet 2nets] alpha/beta/r_safe_from=risk_features(qp), alpha_max={self.alpha_max:.3f}",
             flush=True,
         )
 
@@ -87,10 +87,11 @@ class BarrierNet(BarrierNetV1):
         xa = F.silu(self.alpha_fc1(safety_feat))
         xa = F.silu(self.alpha_fc2(xa))
 
+        alpha = self.alpha_max * torch.sigmoid(self.alpha_out(xa)).squeeze(-1)
         beta = torch.sigmoid(self.beta_out(xa)).squeeze(-1)  # (B,) in [0, 1]
         r_scale = 1.0 + 1.5 * torch.sigmoid(self.rsafe_out(xa)).squeeze(-1)  # (B,) in [1, 2.5]
         r_safe_learned = self.safe_dist * r_scale
-        return beta, r_safe_learned
+        return alpha, beta, r_safe_learned
 
     def forward(self, obs_actor, obs_qp=None):
         if isinstance(obs_actor, np.ndarray):
@@ -122,14 +123,9 @@ class BarrierNet(BarrierNetV1):
         x21 = F.silu(self.fc21(x))
         u_nom = self.fc31(x21)
 
-        # beta / r_safe from risk features; alpha stays fixed.
-        beta, r_safe_learned = self._qp_safety_params_from_obs(obs_qp)
-        self.last_alpha = torch.full(
-            (obs_actor.size(0),),
-            float(self.alpha),
-            device=obs_actor.device,
-            dtype=obs_actor.dtype,
-        )
+        # alpha / beta / r_safe from relative QP observation branch.
+        alpha, beta, r_safe_learned = self._qp_safety_params_from_obs(obs_qp)
+        self.last_alpha = alpha
         self.last_beta = beta
         self.last_r_safe = r_safe_learned
 
@@ -138,14 +134,14 @@ class BarrierNet(BarrierNetV1):
             return u_nom
 
         if self.robot_type == "single_integrator":
-            return self.dCVaR_CBF_SI(obs_qp, u_nom, beta, r_safe_learned)
+            return self.dCVaR_CBF_SI(obs_qp, u_nom, beta, r_safe_learned, alpha=alpha)
         if self.robot_type == "unicycle":
-            return self.dCVaR_CBF_Unicycle(obs_qp, u_nom, beta, r_safe_learned)
+            return self.dCVaR_CBF_Unicycle(obs_qp, u_nom, beta, r_safe_learned, alpha=alpha)
         if self.robot_type == "unicycle_dynamic":
             raise NotImplementedError("dCVaR_CBF_UnicycleDynamic not implemented")
         raise NotImplementedError(f"Robot type {self.robot_type} not supported in CVaR BarrierNet 2nets")
 
-    def dCVaR_CBF_SI(self, obs, u_nom, beta, r_safe_learned):
+    def dCVaR_CBF_SI(self, obs, u_nom, beta, r_safe_learned, alpha=None):
         nBatch = obs.size(0)
         device = self.fc1.weight.device
 
@@ -166,7 +162,10 @@ class BarrierNet(BarrierNetV1):
         sigma_f = torch.sqrt(4.0 * variances * rel_norm_sq + 1e-8)
         rel_dot_mu = 2.0 * (means * rel.unsqueeze(2)).sum(dim=3)  # (B,K,M)
 
-        alpha_term = torch.full((nBatch,), float(self.alpha), device=device, dtype=obs.dtype)
+        if alpha is None:
+            alpha_term = torch.full((nBatch,), float(self.alpha), device=device, dtype=obs.dtype)
+        else:
+            alpha_term = alpha.to(device=device, dtype=obs.dtype).reshape(-1)
         rhs = (-alpha_term.unsqueeze(1).unsqueeze(2) * h.unsqueeze(2)) + rel_dot_mu + (sigma_f * cvar_coeff)
 
         tau = 0.1
@@ -199,7 +198,7 @@ class BarrierNet(BarrierNetV1):
                 x = QPFunction(verbose=0, maxIter=40)(Q_qp, p_qp, G_qp, h_qp_qp, e_qp, e_qp)
         return x.to(dtype=obs.dtype)
 
-    def dCVaR_CBF_Unicycle(self, obs, u_nom_xy, beta, r_safe_learned):
+    def dCVaR_CBF_Unicycle(self, obs, u_nom_xy, beta, r_safe_learned, alpha=None):
         nBatch = obs.size(0)
         device = self.fc1.weight.device
 
@@ -247,7 +246,10 @@ class BarrierNet(BarrierNetV1):
         sigma_f = torch.sqrt(4.0 * variances * pL_norm_sq + 1e-8)
         rel_dot_mu = 2.0 * (means * p_L.unsqueeze(2)).sum(dim=3)
 
-        alpha_term = torch.full((nBatch,), float(self.alpha), device=device, dtype=obs.dtype)
+        if alpha is None:
+            alpha_term = torch.full((nBatch,), float(self.alpha), device=device, dtype=obs.dtype)
+        else:
+            alpha_term = alpha.to(device=device, dtype=obs.dtype).reshape(-1)
         rhs = (-alpha_term.unsqueeze(1).unsqueeze(2) * h.unsqueeze(2)) + rel_dot_mu + (sigma_f * cvar_coeff)
 
         tau = 0.1

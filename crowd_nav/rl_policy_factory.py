@@ -27,6 +27,12 @@ def get_rl_policy_class(method: str):
     if method == "rlcvarbetaradius_2nets_risk":
         import rl.network_qpth_cvar_2nets_risk as cvar_cbf_u_beta_r_2nets_risk
         return cvar_cbf_u_beta_r_2nets_risk.BarrierNet
+    if method == "rlcvarbetaradiusalpha_2nets":
+        import rl.network_qpth_cvar_alpha_2nets as cvar_cbf_u_beta_r_alpha_2nets
+        return cvar_cbf_u_beta_r_alpha_2nets.BarrierNet
+    if method == "rlcvarbetaradiusalpha_2nets_risk":
+        import rl.network_qpth_cvar_alpha_2nets_risk as cvar_cbf_u_beta_r_alpha_2nets_risk
+        return cvar_cbf_u_beta_r_alpha_2nets_risk.BarrierNet
     if method in ("orca", "social_force"):
         raise ValueError(f"method '{method}' is supported in main_opt.py, not main_vec.py")
     raise ValueError(f"Unknown method {method}")

@@ -16,6 +16,8 @@ METHOD_NEEDS_QP_RELATIVE = {
     "rlcvarbetaradius": True,
     "rlcvarbetaradius_2nets": True,
     "rlcvarbetaradius_2nets_risk": True,
+    "rlcvarbetaradiusalpha_2nets": True,
+    "rlcvarbetaradiusalpha_2nets_risk": True,
 }
 
 

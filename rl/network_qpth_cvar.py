@@ -285,18 +285,21 @@ class BarrierNet(nn.Module):
         J[:, 1, 0] = s
         J[:, 1, 1] = epsilon * c
 
-        # Cost (match controller/cbf_qp.py):
+        # Original lookahead-space cost (kept for reference):
         # min ||J u - u_nom_xy||^2
-        JT = J.transpose(1, 2)
-        Q = 2.0 * torch.bmm(JT, J)
-        Q = Q + 1e-6 * torch.eye(self.nCls, device=device, dtype=obs.dtype).unsqueeze(0)
-        p = -2.0 * torch.bmm(JT, u_nom_xy.unsqueeze(-1)).squeeze(-1)
+        # JT = J.transpose(1, 2)
+        # Q = 2.0 * torch.bmm(JT, J)
+        # Q = Q + 1e-6 * torch.eye(self.nCls, device=device, dtype=obs.dtype).unsqueeze(0)
+        # p = -2.0 * torch.bmm(JT, u_nom_xy.unsqueeze(-1)).squeeze(-1)
 
-
-        # # QP: min ||u - u_nom||^2
-        # Q = torch.eye(self.nCls, device=device).unsqueeze(0).expand(nBatch, self.nCls, self.nCls)
-        # p = -2 * u_nom
-        # Q = 2 * Q + 1e-6 * torch.eye(self.nCls, device=device)
+        # New control-space cost (same style as CBF):
+        # min ||u - u_nom_vw||^2
+        # Here we interpret actor output as nominal unicycle control [v, w].
+        u_nom_vw = u_nom_xy
+        Q = 2.0 * torch.eye(self.nCls, device=device, dtype=obs.dtype).unsqueeze(0).expand(
+            nBatch, self.nCls, self.nCls
+        )
+        p = -2.0 * u_nom_vw
 
 
         # Lookahead relative position

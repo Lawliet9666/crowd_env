@@ -8,7 +8,13 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 
-_CVAR_METHODS = {"rlcvarbetaradius", "rlcvarbetaradius_2nets", "rlcvarbetaradius_2nets_risk"}
+_CVAR_METHODS = {
+    "rlcvarbetaradius",
+    "rlcvarbetaradius_2nets",
+    "rlcvarbetaradius_2nets_risk",
+    "rlcvarbetaradiusalpha_2nets",
+    "rlcvarbetaradiusalpha_2nets_risk",
+}
 
 
 def _radius_scalar(v: Any) -> float:

@@ -61,7 +61,13 @@ def get_policy_kwargs(method, cfg: DictConfig | None = None, config=None):
         if "alpha_hidden2" in cfg:
             kwargs["alpha_hidden2"] = int(cfg.alpha_hidden2)
 
-    cvar_methods = {"rlcvarbetaradius", "rlcvarbetaradius_2nets", "rlcvarbetaradius_2nets_risk"}
+    cvar_methods = {
+        "rlcvarbetaradius",
+        "rlcvarbetaradius_2nets",
+        "rlcvarbetaradius_2nets_risk",
+        "rlcvarbetaradiusalpha_2nets",
+        "rlcvarbetaradiusalpha_2nets_risk",
+    }
     if config is not None and method in cvar_methods:
         gmm_cfg = dict(config.human.get("gmm", {}))
         kwargs.update(
