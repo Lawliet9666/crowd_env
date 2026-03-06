@@ -2,12 +2,11 @@
 
 import os
 import sys
-from argparse import Namespace
 from pathlib import Path
 
 import hydra
 import torch
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -127,14 +126,14 @@ def run_policy_test(
         )
 
 
-def main(args):
-    cfg = Config()
-    env_name = cfg.env.get("name", "social_nav_var_num")
-    render_mode = "human" if args.render else "rgb_array"
-    env = build_env(env_name, render_mode=render_mode, config=cfg)
+def main(cfg_args: DictConfig):
+    sim_cfg = Config()
+    env_name = sim_cfg.env.get("name", "social_nav_var_num")
+    render_mode = "human" if bool(cfg_args.render) else "rgb_array"
+    env = build_env(env_name, render_mode=render_mode, config=sim_cfg)
 
     try:
-        method_key = str(args.method).strip().lower()
+        method_key = str(cfg_args.method).strip().lower()
         if method_key not in (
             "rl",
             "rlcbfgamma",
@@ -147,56 +146,50 @@ def main(args):
             "rlcvarbetaradiusalpha_2nets_risk",
         ):
             raise ValueError(
-                f"Unsupported method '{args.method}'. "
+                f"Unsupported method '{cfg_args.method}'. "
                 "Expected one of: rl, rlcbfgamma, rlcbfgamma_2nets, rlcbfgamma_2nets_risk, "
                 "rlcvarbetaradius, rlcvarbetaradius_2nets, rlcvarbetaradius_2nets_risk, "
                 "rlcvarbetaradiusalpha_2nets, rlcvarbetaradiusalpha_2nets_risk."
             )
         needs_qp_relative = bool(METHOD_NEEDS_QP_RELATIVE.get(method_key, False))
-        test_mode = str(args.test_mode).strip().lower()
+        test_mode = str(cfg_args.test_mode).strip().lower()
         if test_mode not in ("eval", "crossing", "both"):
             raise ValueError(
-                f"Unsupported test_mode '{args.test_mode}'. Expected one of: eval, crossing, both."
+                f"Unsupported test_mode '{cfg_args.test_mode}'. Expected one of: eval, crossing, both."
             )
         policy_kwargs = build_eval_policy_kwargs(
-            cfg,
-            args.method,
-            nHidden1=int(args.nHidden1),
-            nHidden21=int(args.nHidden21),
-            nHidden22=int(args.nHidden22),
-            alpha_hidden1=int(args.alpha_hidden1),
-            alpha_hidden2=int(args.alpha_hidden2),
+            sim_cfg,
+            cfg_args.method,
+            nHidden1=int(cfg_args.nHidden1),
+            nHidden21=int(cfg_args.nHidden21),
+            nHidden22=int(cfg_args.nHidden22),
+            alpha_hidden1=int(cfg_args.alpha_hidden1),
+            alpha_hidden2=int(cfg_args.alpha_hidden2),
             qp_obs_dim=None,
         )
         device = torch.device("cpu")
+        save_path_value = str(cfg_args.save_path).strip() if cfg_args.save_path is not None else ""
+        algo_value = str(cfg_args.algo).strip() if cfg_args.algo is not None else ""
         run_policy_test(
             env=env,
-            actor_model=args.actor_model,
-            cfg=cfg,
+            actor_model=str(cfg_args.actor_model),
+            cfg=sim_cfg,
             device=device,
-            method=args.method,
+            method=str(cfg_args.method),
             policy_kwargs=policy_kwargs,
-            obs_topk=args.obs_topk,
-            obs_farest_dist=args.obs_farest_dist,
+            obs_topk=int(cfg_args.obs_topk),
+            obs_farest_dist=float(cfg_args.obs_farest_dist),
             needs_qp_relative=needs_qp_relative,
-            test_episodes=args.test_ep,
-            test_viz_episodes=args.test_viz_ep,
-            base_seed=args.eval_seed,
-            save_path=(args.save_path or None),
+            test_episodes=int(cfg_args.test_ep),
+            test_viz_episodes=int(cfg_args.test_viz_ep),
+            base_seed=(None if cfg_args.eval_seed is None else int(cfg_args.eval_seed)),
+            save_path=(save_path_value or None),
             test_mode=test_mode,
-            algo=(args.algo or None),
+            algo=(algo_value or None),
         )
     finally:
         if hasattr(env, "close"):
             env.close()
-
-
-def _to_eval_test_args(cfg: DictConfig) -> Namespace:
-    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
-    if not isinstance(cfg_dict, dict):
-        raise TypeError("Hydra config must resolve to a flat dict for eval_test.")
-    cfg_dict.pop("hydra", None)
-    return Namespace(**cfg_dict)
 
 
 @hydra.main(
@@ -205,8 +198,7 @@ def _to_eval_test_args(cfg: DictConfig) -> Namespace:
     version_base=None,
 )
 def hydra_main(cfg: DictConfig):
-    args = _to_eval_test_args(cfg)
-    main(args)
+    main(cfg)
 
 
 if __name__ == "__main__":

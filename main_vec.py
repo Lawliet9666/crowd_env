@@ -48,27 +48,52 @@ def make_env_fn(config, env_name):
 
 
 def get_policy_kwargs(method, cfg: DictConfig | None = None, config=None):
+    method_key = str(method).strip().lower()
     kwargs = {}
-    if cfg is not None:
-        if "nHidden1" in cfg:
-            kwargs["nHidden1"] = int(cfg.nHidden1)
-        if "nHidden21" in cfg:
-            kwargs["nHidden21"] = int(cfg.nHidden21)
-        if "nHidden22" in cfg:
-            kwargs["nHidden22"] = int(cfg.nHidden22)
-        if "alpha_hidden1" in cfg:
-            kwargs["alpha_hidden1"] = int(cfg.alpha_hidden1)
-        if "alpha_hidden2" in cfg:
-            kwargs["alpha_hidden2"] = int(cfg.alpha_hidden2)
 
-    cvar_methods = {
+    if cfg is None:
+        return kwargs
+
+    # Shared actor MLP knobs (used by FCNet and BarrierNet base trunks).
+    kwargs["nHidden1"] = int(cfg.nHidden1)
+    kwargs["nHidden21"] = int(cfg.nHidden21)
+
+    safety_methods = {
+        "rlcbfgamma",
+        "rlcbfgamma_2nets",
+        "rlcbfgamma_2nets_risk",
+        "rlcvar",
         "rlcvarbetaradius",
         "rlcvarbetaradius_2nets",
         "rlcvarbetaradius_2nets_risk",
         "rlcvarbetaradiusalpha_2nets",
         "rlcvarbetaradiusalpha_2nets_risk",
     }
-    if config is not None and method in cvar_methods:
+    two_net_methods = {
+        "rlcbfgamma_2nets",
+        "rlcbfgamma_2nets_risk",
+        "rlcvarbetaradius_2nets",
+        "rlcvarbetaradius_2nets_risk",
+        "rlcvarbetaradiusalpha_2nets",
+        "rlcvarbetaradiusalpha_2nets_risk",
+    }
+    cvar_methods = {
+        "rlcvar",
+        "rlcvarbetaradius",
+        "rlcvarbetaradius_2nets",
+        "rlcvarbetaradius_2nets_risk",
+        "rlcvarbetaradiusalpha_2nets",
+        "rlcvarbetaradiusalpha_2nets_risk",
+    }
+
+    if method_key in safety_methods:
+        kwargs["nHidden22"] = int(cfg.nHidden22)
+
+    if method_key in two_net_methods:
+        kwargs["alpha_hidden1"] = int(cfg.alpha_hidden1)
+        kwargs["alpha_hidden2"] = int(cfg.alpha_hidden2)
+
+    if config is not None and method_key in cvar_methods:
         gmm_cfg = dict(config.human.get("gmm", {}))
         kwargs.update(
             {
@@ -77,6 +102,7 @@ def get_policy_kwargs(method, cfg: DictConfig | None = None, config=None):
                 "gmm_lateral_ratio": gmm_cfg.get("lateral_ratio", 0.3),
             }
         )
+
     return kwargs
 
 

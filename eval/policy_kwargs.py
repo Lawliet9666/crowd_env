@@ -74,7 +74,13 @@ def filter_policy_kwargs(policy_class, policy_kwargs):
     kwargs = dict(policy_kwargs or {})
     try:
         sig = inspect.signature(policy_class.__init__)
-        accepted = set(sig.parameters.keys())
+        params = sig.parameters
+        accepts_var_kwargs = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+        )
+        if accepts_var_kwargs:
+            return kwargs
+        accepted = set(params.keys())
         return {k: v for k, v in kwargs.items() if k in accepted}
     except (TypeError, ValueError):
-        return {}
+        return kwargs

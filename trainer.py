@@ -1,6 +1,5 @@
 """Shared training/runtime helpers used by training entrypoints."""
 
-import inspect
 import os
 import random
 import sys
@@ -45,16 +44,6 @@ def select_device(device_arg):
 
     print("Using CPU.", flush=True)
     return torch.device("cpu")
-
-
-def filter_policy_kwargs(policy_class, policy_kwargs):
-    kwargs = dict(policy_kwargs or {})
-    try:
-        sig = inspect.signature(policy_class.__init__)
-        accepted = set(sig.parameters.keys())
-        return {k: v for k, v in kwargs.items() if k in accepted}
-    except (TypeError, ValueError):
-        return {}
 
 
 def load_checkpoints(model, actor_model, critic_model, device, algo):

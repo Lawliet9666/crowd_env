@@ -2,7 +2,6 @@
 Soft Actor-Critic training class adapted to this project's PPO-style interface.
 """
 
-import inspect
 import os
 import random
 import time
@@ -653,19 +652,12 @@ class SAC:
             "vmax": self.vmax,
             "amax": self.amax,
             "omega_max": self.omega_max,
-            "qp_obs_dim": int(self.qp_obs_dim),
-            "qp_start_timesteps": int(self.qp_start_timesteps),
         }
+        if self.use_dual_actor_input:
+            actor_kwargs["qp_obs_dim"] = int(self.qp_obs_dim)
+            actor_kwargs["qp_start_timesteps"] = int(self.qp_start_timesteps)
         actor_kwargs.update(getattr(self, "policy_kwargs", {}))
-
-        try:
-            sig = inspect.signature(policy_class.__init__)
-            accepted = set(sig.parameters.keys())
-            filtered_kwargs = {k: v for k, v in actor_kwargs.items() if k in accepted}
-        except (TypeError, ValueError):
-            filtered_kwargs = {}
-
-        return policy_class(self.actor_obs_dim, self.act_dim, **filtered_kwargs)
+        return policy_class(self.actor_obs_dim, self.act_dim, **actor_kwargs)
 
     @staticmethod
     def _same_state_dict(module_a, module_b):
