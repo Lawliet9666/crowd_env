@@ -133,12 +133,20 @@ def build_train_exp_name(cfg: DictConfig, config, num_envs):
     robot_type = str(config.robot["type"])
     method = str(cfg.method)
     algo = str(cfg.algo).lower().strip()
+    ann_alpha = bool(cfg.get("annealing_learning_alpha", False))
+    ann_beta = bool(cfg.get("annealing_learning_beta", False))
+    ann_radius = bool(cfg.get("annealing_learning_radius", False))
+    ann_tag = f"annA{int(ann_alpha)}B{int(ann_beta)}R{int(ann_radius)}"
+    ann_suffix = f"-{ann_tag}"
+    if ann_alpha or ann_beta or ann_radius:
+        ann_suffix += f"-annT{int(cfg.anneal_end_timesteps)}"
 
     if algo == "sac":
         name = (
             f"{base}-{robot_type}-{method}-sac-"
             f"bs{int(cfg.sac_batch_size)}-a{cfg.sac_alpha}-"
             f"up{int(cfg.sac_updates_per_step)}-k{int(cfg.obs_topk)}-env{int(num_envs)}"
+            f"{ann_suffix}"
         )
         if bool(cfg.sac_auto_alpha):
             name += "-auto"
@@ -152,6 +160,7 @@ def build_train_exp_name(cfg: DictConfig, config, num_envs):
         f"bs{int(cfg.timesteps_per_batch)}-ep{int(cfg.n_updates_per_iteration)}-"
         f"mbsz{mb_size_str}-"
         f"k{int(cfg.obs_topk)}-env{int(num_envs)}"
+        f"{ann_suffix}"
     )
     return name
 
