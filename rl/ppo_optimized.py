@@ -257,7 +257,7 @@ class PPO:
                     
                     # Calculate gradients and perform backward propagation for actor network
                     self.actor_optim.zero_grad()
-                    actor_loss.backward(retain_graph=True)
+                    actor_loss.backward(retain_graph=False)
 
                     # --- Log Gradient Norm and Distribution Stats ---
                     total_norm_sq = 0.0
@@ -316,7 +316,9 @@ class PPO:
                     self.logger['rsafe_head_grads'].append(rsafe_head_sq ** 0.5)
 
                     with torch.no_grad():
-                        curr_mu_latent = self._actor_forward(batch_obs, batch_obs_qp)
+                        # Logging-only pass: use current minibatch to avoid an expensive
+                        # extra full-batch actor forward (especially costly with QP actors).
+                        curr_mu_latent = self._actor_forward(mini_obs, mini_obs_qp)
                         curr_mu, _ = self._squash_action(curr_mu_latent)
                         self.logger['mu_means'].append(curr_mu.mean().item())
                         self.logger['sigma_means'].append(torch.exp(self.log_std).mean().item())
@@ -723,7 +725,7 @@ class PPO:
         self.clip = 0.2                                 # Recommended 0.2, helps define the threshold to clip the ratio during SGA
 
         self.lam = 0.98                                 # Lambda Parameter for GAE 
-        self.num_minibatches = 6                        # Number of mini-batches for Mini-batch Update
+        self.num_minibatches = 16                        # Number of mini-batches for Mini-batch Update
         self.ent_coef = 0.01                            # Entropy coefficient for Entropy Regularization
         self.target_kl = 0.02                           # KL Divergence threshold
         self.max_grad_norm = 0.5                        # Gradient Clipping threshold

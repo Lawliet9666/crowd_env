@@ -145,6 +145,7 @@ def build_ppo_hyperparameters(cfg, base_hyperparameters):
         {
             "n_updates_per_iteration": cfg.n_updates_per_iteration,
             "timesteps_per_batch": cfg.timesteps_per_batch,
+            "num_minibatches": cfg.num_minibatches,
             "clip": cfg.clip,
             "lr": cfg.lr,
             "gamma": cfg.gamma,
