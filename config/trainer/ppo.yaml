@@ -16,5 +16,5 @@ target_kl: 0.02
 max_grad_norm: 0.5
 action_std_init: 0.5
 
-eval_freq_timesteps: 8000
-eval_episodes: 50
+eval_freq_timesteps: 50000
+eval_episodes: 20

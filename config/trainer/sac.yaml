@@ -22,4 +22,4 @@ sac_target_entropy: -1.2
 sac_action_std_init: 0.2
 
 sac_eval_freq_episodes: 100
-sac_eval_episodes: 50
+sac_eval_episodes: 20
