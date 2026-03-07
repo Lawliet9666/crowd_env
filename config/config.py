@@ -103,7 +103,7 @@ class Config:
         # Optimization controller parameters
         self.controller = BaseConfig()
         self.controller.cbf_alpha = 2.0  # for CBF and CVaR-CBF Controller
-        self.controller.cvar_beta = 0.5  # for CVaR-BFQP Controller
+        self.controller.cvar_beta = 0.99  # for CVaR-BFQP Controller
         self.controller.safety_margin = 0.05  # similar to discomfort distance but used in controller
 
         # Reward Parameters

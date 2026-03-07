@@ -140,118 +140,76 @@ def _safe_scalar(val, default=np.nan):
     except Exception:
         return default
 
-def _setup_unom_hook(actor):
-    target = None
-    if hasattr(actor, "fc31"):
-        target = actor.fc31
-    elif hasattr(actor, "fc_out"):
-        target = actor.fc_out
-    if target is None:
-        return None, None
-    holder = {"val": None}
+def _control_plot_bound(env, action_series):
+    env_ref = getattr(env, "unwrapped", env)
+    robot = getattr(env_ref, "robot", None)
+    robot_type = str(getattr(env_ref, "robot_type", getattr(robot, "type", ""))).lower()
 
-    def _hook(_module, _inputs, output):
-        if torch.is_tensor(output):
-            holder["val"] = output.detach().cpu().numpy()
-        else:
-            holder["val"] = output
+    if robot_type == "single_integrator":
+        vmax = float(getattr(robot, "vmax", 1.0))
+        return max(abs(vmax), 1e-3)
+    if robot_type == "unicycle":
+        vmax = float(getattr(robot, "vmax", 1.0))
+        wmax = float(getattr(robot, "w_max", getattr(robot, "omega_max", vmax)))
+        return max(abs(vmax), abs(wmax), 1e-3)
+    if robot_type == "unicycle_dynamic":
+        wmax = float(getattr(robot, "w_max", getattr(robot, "omega_max", 1.0)))
+        vmax = float(getattr(robot, "vmax", 1.0))
+        return max(abs(vmax), abs(wmax), 1e-3)
 
-    handle = target.register_forward_hook(_hook)
-    return handle, holder
-
-
-def _build_unom_series(values, actions):
-    T = len(actions)
-    u = np.full((T, 2), np.nan, dtype=float)
-    any_unom = False
-    for i in range(T):
-        val = values[i] if i < len(values) else None
-        if val is None:
-            continue
-        arr = np.asarray(val).reshape(-1)
-        if arr.size >= 1:
-            u[i, 0] = arr[0]
-        if arr.size >= 2:
-            u[i, 1] = arr[1]
-        any_unom = True
-    if not any_unom:
-        for i in range(T):
-            act = np.asarray(actions[i]).reshape(-1)
-            if act.size >= 1:
-                u[i, 0] = act[0]
-            if act.size >= 2:
-                u[i, 1] = act[1]
-    return u, any_unom
+    if action_series is not None and action_series.size > 0:
+        finite = np.abs(action_series[np.isfinite(action_series)])
+        if finite.size > 0:
+            return max(float(np.max(finite)), 1e-3)
+    return 1.0
 
 
-def _compose_frames(env_frames, metrics, method, dt):
+def _compose_frames(env_frames, metrics, dt, env=None):
     frames = []
     T = len(env_frames)
     time_axis = np.arange(T) * dt
-    alpha_series = np.array([_safe_scalar(v) for v in metrics.get("alpha", [])], dtype=float)
     beta_series = np.array([_safe_scalar(v) for v in metrics.get("beta", [])], dtype=float)
-    rsafe_series = np.array([_safe_scalar(v) for v in metrics.get("r_safe", [])], dtype=float)
-    action_exec = metrics.get("action_exec", None)
-    action_list = action_exec if action_exec is not None else metrics.get("action", [])
-    unom_series, has_unom = _build_unom_series(metrics.get("unom", []), action_list)
-    action_series = np.array(action_list, dtype=float) if action_list else None
+    delta_r_series = np.array([_safe_scalar(v) for v in metrics.get("delta_r", [])], dtype=float)
+    action_exec = metrics.get("action_exec", [])
+    u_series = np.array(action_exec, dtype=float) if action_exec else np.full((T, 2), np.nan, dtype=float)
+    u_bound = _control_plot_bound(env, u_series) if env is not None else 1.0
 
-    # Determine plot layout based on method string
-    method_str = (method or "").lower()
-    is_cbf = "cbf" in method_str
-    is_cvar = "cvar" in method_str
-    
-    # If strictly CBF (and not CVaR), use 2 rows. Otherwise (CVaR or others) use 3.
-    rows = 2 if (is_cbf and not is_cvar) else 3
     for t in range(T):
-        fig = plt.figure(figsize=(10, 5) if rows == 2 else (10, 6))
-        gs = fig.add_gridspec(rows, 2, width_ratios=[1.4, 1.0], wspace=0.35, hspace=0.4)
+        fig = plt.figure(figsize=(9.6, 6.2))
+        gs = fig.add_gridspec(3, 2, width_ratios=[1.55, 1.0], wspace=0.06, hspace=0.34)
+        fig.subplots_adjust(left=0.04, right=0.99, top=0.95, bottom=0.11)
+        title_fs = 16
+        axis_label_fs = 14
+        tick_fs = 12
+        legend_fs = 10
 
         ax_env = fig.add_subplot(gs[:, 0])
         ax_env.imshow(env_frames[t])
         ax_env.axis("off")
 
-        if rows == 2:
-            ax1 = fig.add_subplot(gs[0, 1])
-            ax2 = fig.add_subplot(gs[1, 1])
-            ax1.plot(time_axis[:t+1], alpha_series[:t+1], color="tab:blue")
-            ax1.set_title("gamma/alpha")
-            ax1.grid(True, alpha=0.2)
-            ax1.set_ylim(-0.1, 4.1)
+        ax1 = fig.add_subplot(gs[0, 1])
+        ax2 = fig.add_subplot(gs[1, 1])
+        ax3 = fig.add_subplot(gs[2, 1])
+        for ax in (ax1, ax2, ax3):
+            ax.tick_params(axis="both", labelsize=tick_fs)
 
-            ax2.plot(time_axis[:t+1], unom_series[:t+1, 0], label="u_nom[0]" if has_unom else "u[0]", color="tab:orange")
-            ax2.plot(time_axis[:t+1], unom_series[:t+1, 1], label="u_nom[1]" if has_unom else "u[1]", color="tab:green")
-            if action_series is not None and action_series.shape[0] >= t + 1:
-                ax2.plot(time_axis[:t+1], action_series[:t+1, 0], label="u[0]", color="tab:orange", linestyle="--", alpha=0.8)
-                ax2.plot(time_axis[:t+1], action_series[:t+1, 1], label="u[1]", color="tab:green", linestyle="--", alpha=0.8)
-            ax2.set_title("u_nom vs u" if has_unom else "u")
-            ax2.set_xlabel("t (s)")
-            ax2.grid(True, alpha=0.2)
-            ax2.legend(loc="upper right", fontsize=8)
-        else:
-            ax1 = fig.add_subplot(gs[0, 1])
-            ax2 = fig.add_subplot(gs[1, 1])
-            ax3 = fig.add_subplot(gs[2, 1])
+        ax1.plot(time_axis[:t+1], beta_series[:t+1], color="tab:blue")
+        ax1.set_title(r"$\beta$", fontsize=title_fs)
+        ax1.set_ylim(0.0, 1.0)
+        ax1.grid(True, alpha=0.2)
 
-            ax1.plot(time_axis[:t+1], beta_series[:t+1], color="tab:blue")
-            ax1.set_title("beta")
-            ax1.set_ylim(-0.1, 1.1)
-            ax1.grid(True, alpha=0.2)
+        ax2.plot(time_axis[:t+1], delta_r_series[:t+1], color="tab:purple")
+        ax2.set_title(r"$\Delta R$", fontsize=title_fs)
+        ax2.grid(True, alpha=0.2)
+        ax2.set_ylim(0.7, 1.6)
 
-            ax2.plot(time_axis[:t+1], rsafe_series[:t+1], color="tab:purple")
-            ax2.set_title("r_safe")
-            ax2.grid(True, alpha=0.2)
-            ax2.set_ylim(0.5,2.0)
-
-            ax3.plot(time_axis[:t+1], unom_series[:t+1, 0], label="u_nom[0]" if has_unom else "u[0]", color="tab:orange")
-            ax3.plot(time_axis[:t+1], unom_series[:t+1, 1], label="u_nom[1]" if has_unom else "u[1]", color="tab:green")
-            if action_series is not None and action_series.shape[0] >= t + 1:
-                ax3.plot(time_axis[:t+1], action_series[:t+1, 0], label="u[0]", color="tab:orange", linestyle="--", alpha=0.8)
-                ax3.plot(time_axis[:t+1], action_series[:t+1, 1], label="u[1]", color="tab:green", linestyle="--", alpha=0.8)
-            ax3.set_title("u_nom vs u" if has_unom else "u")
-            ax3.set_xlabel("t (s)")
-            ax3.grid(True, alpha=0.2)
-            ax3.legend(loc="upper right", fontsize=8)
+        ax3.plot(time_axis[:t+1], u_series[:t+1, 0], label=r"$u[0]$", color="tab:orange")
+        ax3.plot(time_axis[:t+1], u_series[:t+1, 1], label=r"$u[1]$", color="tab:green")
+        ax3.set_title(r"$u$", fontsize=title_fs)
+        ax3.set_xlabel(r"$t$ (s)", fontsize=axis_label_fs)
+        ax3.grid(True, alpha=0.2)
+        ax3.set_ylim(-u_bound, u_bound)
+        ax3.legend(loc="upper right", fontsize=legend_fs)
 
         fig.canvas.draw()
         if hasattr(fig.canvas, "buffer_rgba"):
@@ -270,11 +228,8 @@ def _init_metrics(track_signals):
     if not track_signals:
         return None
     return {
-        "alpha": [],
         "beta": [],
-        "r_safe": [],
-        "unom": [],
-        "action": [],
+        "delta_r": [],
         "action_exec": [],
     }
 
@@ -290,15 +245,12 @@ def _render_step(env, frames):
         env.render()
 
 
-def _record_actor_metrics(metrics, actor, action, unom_holder):
+def _record_actor_metrics(metrics, actor):
     if metrics is None:
         return
 
-    metrics["action"].append(np.array(action, dtype=float))
-    metrics["unom"].append(unom_holder.get("val") if unom_holder is not None else None)
-    metrics["alpha"].append(getattr(actor, "last_alpha", getattr(actor, "alpha", None)))
     metrics["beta"].append(getattr(actor, "last_beta", getattr(actor, "beta", None)))
-    metrics["r_safe"].append(getattr(actor, "last_r_safe", getattr(actor, "safe_dist", None)))
+    metrics["delta_r"].append(getattr(actor, "last_r_safe", getattr(actor, "safe_dist", None)))
 
 
 def _record_executed_action(metrics, env, fallback_action):
@@ -322,7 +274,6 @@ def run_one_episode(
     seed=None,
     reset_options=None,
     track_signals=False,
-    unom_holder=None,
     collect_frames=False,
     obs_preprocess_fn=None,
 ):
@@ -355,7 +306,7 @@ def run_one_episode(
             obs,
             obs_preprocess_fn=obs_preprocess_fn,
         )
-        _record_actor_metrics(metrics, actor, action, unom_holder)
+        _record_actor_metrics(metrics, actor)
         if bool(getattr(actor, "infeasible", False)):
             ep_infeasible = True
             _record_executed_action(metrics, env, action)
@@ -402,63 +353,53 @@ def eval_policy(
    
     mode = (method or "").lower()
     track_signals = ("cbf" in mode) or ("cvar" in mode)
-    hook_handle = None
-    unom_holder = None
-    if track_signals:
-        hook_handle, unom_holder = _setup_unom_hook(actor)
+    for ep_num in range(max_episodes):
+        seed = resolve_episode_seed(base_seed, ep_num)
+        result = run_one_episode(
+            actor,
+            env,
+            seed=seed,
+            reset_options=None,
+            track_signals=track_signals,
+            collect_frames=True,
+            obs_preprocess_fn=obs_preprocess_fn,
+        )
+        ep_len = result["ep_len"]
+        ep_ret = result["ep_ret"]
+        ep_collision = result["ep_collision"]
+        ep_success = result["ep_success"]
+        ep_infeasible = result["ep_infeasible"]
+        frames = result["frames"]
+        metrics = result["metrics"]
 
-    try:
-        for ep_num in range(max_episodes):
-            seed = resolve_episode_seed(base_seed, ep_num)
-            result = run_one_episode(
-                actor,
-                env,
-                seed=seed,
-                reset_options=None,
-                track_signals=track_signals,
-                unom_holder=unom_holder,
-                collect_frames=True,
-                obs_preprocess_fn=obs_preprocess_fn,
-            )
-            ep_len = result["ep_len"]
-            ep_ret = result["ep_ret"]
-            ep_collision = result["ep_collision"]
-            ep_success = result["ep_success"]
-            ep_infeasible = result["ep_infeasible"]
-            frames = result["frames"]
-            metrics = result["metrics"]
+        _log_summary(ep_len, ep_ret, ep_num, ep_collision, ep_success)
 
-            _log_summary(ep_len, ep_ret, ep_num, ep_collision, ep_success)
+        success_flag = ep_success and (not ep_collision)
+        if len(frames) > 0 and save_path:
+            os.makedirs(save_path, exist_ok=True)
 
-            success_flag = ep_success and (not ep_collision)
-            if len(frames) > 0 and save_path:
-                os.makedirs(save_path, exist_ok=True)
+            # Save the first N episodes regardless of success/failure.
+            if ep_num < visualize_episodes:
+                succ_bit = 1 if success_flag else 0
+                coll_bit = 1 if ep_collision else 0
+                gif_name = f"eval_ep_{ep_num}_succ_{succ_bit}_coll_{coll_bit}.gif"
+                full_path = os.path.join(save_path, gif_name)
 
-                # Save the first N episodes regardless of success/failure.
-                if ep_num < visualize_episodes:
-                    succ_bit = 1 if success_flag else 0
-                    coll_bit = 1 if ep_collision else 0
-                    gif_name = f"eval_ep_{ep_num}_succ_{succ_bit}_coll_{coll_bit}.gif"
-                    full_path = os.path.join(save_path, gif_name)
+                if track_signals and metrics is not None:
+                    dt = getattr(env, "dt", 1.0)
+                    composed = _compose_frames(frames, metrics, dt, env=env)
+                    imageio.mimsave(full_path, composed, fps=10)
+                else:
+                    imageio.mimsave(full_path, frames, fps=10)
+                print(f"Saved evaluation animation to {full_path}")
 
-                    if track_signals and metrics is not None:
-                        dt = getattr(env, "dt", 1.0)
-                        composed = _compose_frames(frames, metrics, mode, dt)
-                        imageio.mimsave(full_path, composed, fps=10)
-                    else:
-                        imageio.mimsave(full_path, frames, fps=10)
-                    print(f"Saved evaluation animation to {full_path}")
-
-            total_episodes += 1
-            if ep_success and not ep_collision:
-                success_count += 1
-            if ep_collision:
-                collision_count += 1
-            if ep_infeasible:
-                infeasible_count += 1
-    finally:
-        if hook_handle is not None:
-            hook_handle.remove()
+        total_episodes += 1
+        if ep_success and not ep_collision:
+            success_count += 1
+        if ep_collision:
+            collision_count += 1
+        if ep_infeasible:
+            infeasible_count += 1
 
     print("\n\n-------------------- Evaluation Summary --------------------")
     print(f"Total Episodes: {total_episodes}")
@@ -515,7 +456,6 @@ def run_crossing_scenario(
         seed=None,
         reset_options={"scenario": "crossing"},
         track_signals=False,
-        unom_holder=None,
         collect_frames=True,
         obs_preprocess_fn=obs_preprocess_fn,
     )

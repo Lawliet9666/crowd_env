@@ -222,8 +222,17 @@ Use this for one actor checkpoint.
 
 ```bash
 python eval/eval_test.py \
-  method=rlcbfgamma \
-  actor_model=trained_models/default/20260303_160118_unicycle_rlcbfgamma_ppo/ppo_actor_best.pth \
+  method=rl \
+  actor_model=trained_models/default/rl_cvar_bf_adaptive-unicycle-rl-ppo-bs8192-ep8-mbsz512-k1-env8_1/ppo_actor_best.pth \
+  test_mode=both \
+  test_ep=100 \
+  test_viz_ep=10 \
+  eval_seed=100 \
+  obs_topk=1
+
+python eval/eval_test.py \
+  method=rlcvarbetaradius_2nets \
+  actor_model=trained_models/default2/v2_rl_cvar_bf_adaptive_beta09-unicycle-rlcvarbetaradius_2nets-ppo-bs8192-ep8-mbsz512-k1-env32-annA0B0R0/ppo_actor_step_10000000.pth \
   test_mode=both \
   test_ep=100 \
   test_viz_ep=10 \
@@ -243,8 +252,14 @@ python eval/eval_test.py \
 Use this to evaluate all actor checkpoints under one run folder with fixed seeds.
 
 ```bash
-python eval/eval_batch.py \
-  actor_model=trained_models/default/20260227_111328_unicycle_rl_ppo \
+  python eval/eval_batch.py \
+  method=rl \
+  actor_model=trained_models/default/rl_cvar_bf_adaptive-unicycle-rl-ppo-bs8192-ep8-mbsz512-k1-env8_1/ \
+  episodes_per_seed=50
+
+  python eval/eval_batch.py \
+  method=rlcvarbetaradius_2nets \
+  actor_model=trained_models/default2/v2_rl_cvar_bf_adaptive_beta09-unicycle-rlcvarbetaradius_2nets-ppo-bs8192-ep8-mbsz512-k1-env32-annA0B0R0 \
   episodes_per_seed=50
 ```
 

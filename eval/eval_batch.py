@@ -135,7 +135,6 @@ def evaluate_actor(
             env=env,
             seed=seed,
             track_signals=False,
-            unom_holder=None,
             collect_frames=False,
             obs_preprocess_fn=obs_preprocess_fn,
         )

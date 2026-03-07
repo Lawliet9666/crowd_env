@@ -612,7 +612,7 @@ class SocialNav(gym.Env):
         self.ax.set_aspect('equal')
         
         # Draw Goal
-        goal = plt.Circle(self.goal_pos, 0.2, color='blue', alpha=0.5, label='Goal')
+        goal = plt.Circle(self.goal_pos, 0.5, color='blue', alpha=0.5)
         self.ax.add_artist(goal)
         self.ax.text(self.goal_pos[0], self.goal_pos[1], 'G', color='white', ha='center', va='center')
         
@@ -630,21 +630,20 @@ class SocialNav(gym.Env):
                     self.ax.plot(
                         human_traj_arr[:, 0],
                         human_traj_arr[:, 1],
-                        color='red',
+                        color='gray',
                         alpha=0.35,
                         linewidth=1,
                     )
 
         # Draw Robot
-        robot = plt.Circle(self.robot_pos, self.robot_radius, color='blue', alpha=0.5, label='Robot')
+        robot = plt.Circle(self.robot_pos, self.robot_radius, color='blue', alpha=0.5)
         self.ax.add_artist(robot)
         
         # Draw Humans
         for i in range(self.num_humans):
-            human = plt.Circle(self.human_positions[i], self.human_radii[i], color='red', alpha=0.5)
+            human = plt.Circle(self.human_positions[i], self.human_radii[i], color='gray', alpha=0.5)
             self.ax.add_artist(human)
-        
-        self.ax.legend(loc='upper right')
+
         # self.ax.grid(True, linestyle='--', alpha=0.5)
         self.ax.grid(False)
         self.ax.set_title(f"Step: {self.current_step}")

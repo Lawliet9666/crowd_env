@@ -309,7 +309,6 @@ def evaluate_one_method(
             seed=seed,
             reset_options=None,
             track_signals=False,
-            unom_holder=None,
             collect_frames=collect_frames,
             obs_preprocess_fn=obs_preprocess_fn,
         )
