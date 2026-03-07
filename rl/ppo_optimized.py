@@ -120,6 +120,9 @@ class PPO:
             'rsafe_head_grads': [],  # gradients of learned safe-radius head params
             'mu_means': [],          # mean of mu (action mean)
             'sigma_means': [],       # mean of sigma (exploration noise)
+            'alpha_vals': [],        # learned safety alpha values
+            'beta_vals': [],         # learned safety beta values
+            'rsafe_vals': [],        # learned safety radius values
             'barrier_min_batch': [], # min barrier value in batch
             'barrier_avg_batch': [], # average barrier value in batch
         }
@@ -323,6 +326,15 @@ class PPO:
                         curr_mu = self._action_mean_from_actor_output(curr_actor_output)
                         self.logger['mu_means'].append(curr_mu.mean().item())
                         self.logger['sigma_means'].append(torch.exp(self.log_std).mean().item())
+                        alpha_val = self._actor_attr_mean("last_alpha")
+                        beta_val = self._actor_attr_mean("last_beta")
+                        rsafe_val = self._actor_attr_mean("last_r_safe")
+                        if alpha_val is not None:
+                            self.logger['alpha_vals'].append(alpha_val)
+                        if beta_val is not None:
+                            self.logger['beta_vals'].append(beta_val)
+                        if rsafe_val is not None:
+                            self.logger['rsafe_vals'].append(rsafe_val)
                     # -----------------------------------------------
 
                     # Gradient Clipping with given threshold
@@ -669,6 +681,21 @@ class PPO:
         action_mean, _ = self._squash_action(actor_output)
         return action_mean
 
+    def _actor_attr_mean(self, attr_name):
+        if not hasattr(self.actor, attr_name):
+            return None
+        value = getattr(self.actor, attr_name)
+        if value is None:
+            return None
+        if torch.is_tensor(value):
+            if value.numel() == 0:
+                return None
+            return float(value.detach().float().mean().cpu().item())
+        arr = np.asarray(value, dtype=np.float32)
+        if arr.size == 0:
+            return None
+        return float(arr.mean())
+
     def _to_critic_obs(self, obs):
         return obs
 
@@ -836,6 +863,9 @@ class PPO:
         avg_rsafe_head_grad = np.mean(self.logger['rsafe_head_grads']) if self.logger['rsafe_head_grads'] else 0.0
         avg_mu = np.mean(self.logger['mu_means']) if self.logger['mu_means'] else 0.0
         avg_sigma = np.mean(self.logger['sigma_means']) if self.logger['sigma_means'] else 0.0
+        avg_alpha_val = np.mean(self.logger['alpha_vals']) if self.logger['alpha_vals'] else None
+        avg_beta_val = np.mean(self.logger['beta_vals']) if self.logger['beta_vals'] else None
+        avg_rsafe_val = np.mean(self.logger['rsafe_vals']) if self.logger['rsafe_vals'] else None
         min_barrier = self.logger.get('barrier_min_batch', 0.0)
         avg_barrier = self.logger.get('barrier_avg_batch', 0.0)
         n_episodes = max(len(self.logger['batch_lens']), 1)
@@ -844,7 +874,7 @@ class PPO:
         collision_rate = float(self.logger.get('n_collision', 0)) / n_episodes
 
         if wandb.run is not None:
-            wandb.log({
+            payload = {
                 "iteration": i_so_far,
                 "timesteps": t_so_far,
                 "ep_len": avg_ep_lens,
@@ -868,7 +898,14 @@ class PPO:
                 "collision_rate": float(self.logger.get('n_collision', 0)) / max(len(self.logger['batch_lens']), 1),
                 "iteration_time": float(delta_t),
                 "lr": lr,
-            }, step=t_so_far)
+            }
+            if avg_alpha_val is not None:
+                payload["safety/learned_alpha"] = float(avg_alpha_val)
+            if avg_beta_val is not None:
+                payload["safety/learned_beta"] = float(avg_beta_val)
+            if avg_rsafe_val is not None:
+                payload["safety/learned_r_safe"] = float(avg_rsafe_val)
+            wandb.log(payload, step=t_so_far)
 
         # Round decimal places for more aesthetic logging messages
         avg_ep_lens = str(round(avg_ep_lens, 2))
@@ -934,6 +971,9 @@ class PPO:
         self.logger['rsafe_head_grads'] = []
         self.logger['mu_means'] = []
         self.logger['sigma_means'] = []
+        self.logger['alpha_vals'] = []
+        self.logger['beta_vals'] = []
+        self.logger['rsafe_vals'] = []
         self.logger['barrier_min_batch'] = []
         self.logger['barrier_avg_batch'] = []
         self.logger['n_timeout'] = 0

@@ -200,6 +200,9 @@ class SAC:
             "q2_vals": [],
             "logp_vals": [],
             "alpha_vals": [],
+            "safety_alpha_vals": [],
+            "safety_beta_vals": [],
+            "safety_rsafe_vals": [],
             "mu_means": [],
             "sigma_means": [],
             "barrier_vals": [],
@@ -390,6 +393,21 @@ class SAC:
             return self._clip_action_tensor(actor_output)
         return torch.tanh(actor_output) * self.action_scale + self.action_bias
 
+    def _actor_attr_mean(self, attr_name):
+        if not hasattr(self.actor, attr_name):
+            return None
+        value = getattr(self.actor, attr_name)
+        if value is None:
+            return None
+        if torch.is_tensor(value):
+            if value.numel() == 0:
+                return None
+            return float(value.detach().float().mean().cpu().item())
+        arr = np.asarray(value, dtype=np.float32)
+        if arr.size == 0:
+            return None
+        return float(arr.mean())
+
     def _update_step(self):
         obs, act, rew, next_obs, done, obs_qp, next_obs_qp = self.replay_buffer.sample(self.batch_size)
         obs_critic = self._to_critic_obs(obs)
@@ -458,6 +476,15 @@ class SAC:
         }
         if alpha_loss is not None:
             stats["alpha_loss"] = float(alpha_loss.detach().cpu().item())
+        safety_alpha = self._actor_attr_mean("last_alpha")
+        safety_beta = self._actor_attr_mean("last_beta")
+        safety_rsafe = self._actor_attr_mean("last_r_safe")
+        if safety_alpha is not None:
+            stats["safety_alpha"] = safety_alpha
+        if safety_beta is not None:
+            stats["safety_beta"] = safety_beta
+        if safety_rsafe is not None:
+            stats["safety_rsafe"] = safety_rsafe
         return stats
 
     def _accumulate_update_stats(self, stats):
@@ -471,6 +498,12 @@ class SAC:
         self.logger["alpha_vals"].append(stats["alpha"])
         self.logger["mu_means"].append(stats["mu_mean"])
         self.logger["sigma_means"].append(stats["sigma_mean"])
+        if "safety_alpha" in stats:
+            self.logger["safety_alpha_vals"].append(stats["safety_alpha"])
+        if "safety_beta" in stats:
+            self.logger["safety_beta_vals"].append(stats["safety_beta"])
+        if "safety_rsafe" in stats:
+            self.logger["safety_rsafe_vals"].append(stats["safety_rsafe"])
 
     def _log_summary(self):
         prev_t = self.logger["delta_t"]
@@ -489,6 +522,15 @@ class SAC:
         avg_q2 = float(np.mean(self.logger["q2_vals"])) if self.logger["q2_vals"] else 0.0
         avg_logp = float(np.mean(self.logger["logp_vals"])) if self.logger["logp_vals"] else 0.0
         avg_alpha = float(np.mean(self.logger["alpha_vals"])) if self.logger["alpha_vals"] else self.alpha_value
+        avg_safety_alpha = (
+            float(np.mean(self.logger["safety_alpha_vals"])) if self.logger["safety_alpha_vals"] else None
+        )
+        avg_safety_beta = (
+            float(np.mean(self.logger["safety_beta_vals"])) if self.logger["safety_beta_vals"] else None
+        )
+        avg_safety_rsafe = (
+            float(np.mean(self.logger["safety_rsafe_vals"])) if self.logger["safety_rsafe_vals"] else None
+        )
         avg_mu = float(np.mean(self.logger["mu_means"])) if self.logger["mu_means"] else 0.0
         avg_sigma = float(np.mean(self.logger["sigma_means"])) if self.logger["sigma_means"] else 0.0
         min_barrier = float(np.min(self.logger["barrier_vals"])) if self.logger["barrier_vals"] else np.nan
@@ -524,6 +566,12 @@ class SAC:
                 payload["barrier_min_batch"] = min_barrier
             if not np.isnan(avg_barrier):
                 payload["barrier_avg_batch"] = avg_barrier
+            if avg_safety_alpha is not None:
+                payload["safety/learned_alpha"] = avg_safety_alpha
+            if avg_safety_beta is not None:
+                payload["safety/learned_beta"] = avg_safety_beta
+            if avg_safety_rsafe is not None:
+                payload["safety/learned_r_safe"] = avg_safety_rsafe
             wandb.log(payload, step=t_so_far)
 
         print(flush=True)
@@ -561,6 +609,9 @@ class SAC:
         self.logger["q2_vals"] = []
         self.logger["logp_vals"] = []
         self.logger["alpha_vals"] = []
+        self.logger["safety_alpha_vals"] = []
+        self.logger["safety_beta_vals"] = []
+        self.logger["safety_rsafe_vals"] = []
         self.logger["mu_means"] = []
         self.logger["sigma_means"] = []
         self.logger["barrier_vals"] = []
