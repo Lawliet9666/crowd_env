@@ -32,6 +32,7 @@ class FCNet(nn.Module):
         self.nHidden21 = nHidden21
         self.nCls = nCls
         self.safe_dist = safe_dist
+        self.outputs_real_action = False
 
 
         self.fc1 = nn.Linear(nFeatures, nHidden1)

@@ -88,6 +88,7 @@ class PPO:
         actor_kwargs.update(getattr(self, "policy_kwargs", {}))
 
         self.actor = policy_class(self.actor_obs_dim, self.act_dim, **actor_kwargs).to(self.device)
+        self.actor_outputs_real_action = bool(getattr(self.actor, "outputs_real_action", False))
         # else:
         self.critic = FCNet(self.critic_obs_dim, 1).to(self.device)
 
@@ -318,8 +319,8 @@ class PPO:
                     with torch.no_grad():
                         # Logging-only pass: use current minibatch to avoid an expensive
                         # extra full-batch actor forward (especially costly with QP actors).
-                        curr_mu_latent = self._actor_forward(mini_obs, mini_obs_qp)
-                        curr_mu, _ = self._squash_action(curr_mu_latent)
+                        curr_actor_output = self._actor_forward(mini_obs, mini_obs_qp)
+                        curr_mu = self._action_mean_from_actor_output(curr_actor_output)
                         self.logger['mu_means'].append(curr_mu.mean().item())
                         self.logger['sigma_means'].append(torch.exp(self.log_std).mean().item())
                     # -----------------------------------------------
@@ -385,7 +386,8 @@ class PPO:
                         obs_qp_tensor = torch.tensor(obs_qp, dtype=torch.float).to(self.device).unsqueeze(0)
                     # Use mean action directly (deterministic)
                     if hasattr(self, 'actor'):
-                        action_tensor, _ = self._squash_action(self._actor_forward(obs_tensor, obs_qp_tensor))
+                        actor_output = self._actor_forward(obs_tensor, obs_qp_tensor)
+                        action_tensor = self._action_mean_from_actor_output(actor_output)
                         action = action_tensor.detach().cpu().numpy()[0] # Remove batch dim
                     else:
                         raise ValueError("Actor model not found during evaluation")
@@ -603,8 +605,9 @@ class PPO:
         obs_qp_t = None
         if obs_qp_arr is not None:
             obs_qp_t = torch.tensor(obs_qp_arr, dtype=torch.float).to(self.device)
-        mean = self._actor_forward(obs_actor_t, obs_qp_t)  # latent mean (unbounded)
-        dist = self._build_action_dist(mean)
+        actor_output = self._actor_forward(obs_actor_t, obs_qp_t)
+        latent_mean = self._policy_latent_mean(actor_output)
+        dist = self._build_action_dist(latent_mean)
 
         # Sample latent action then squash/mapping to real action bounds
         z = dist.rsample()
@@ -617,7 +620,7 @@ class PPO:
         # If we're testing, just return the deterministic action. Sampling should only be for training
         # as our "exploration" factor.
         if self.deterministic:
-            action_det, _ = self._squash_action(mean)
+            action_det = self._action_mean_from_actor_output(actor_output)
             return action_det.detach().cpu().numpy(), 1
 
         # Return the sampled action and the log probability of that action in our distribution
@@ -645,6 +648,27 @@ class PPO:
             raise ValueError("Dual-input actor requires relative obs_qp for actor forward.")
         return self.actor(obs_actor, obs_qp)
 
+    def _clip_action_tensor(self, action):
+        low = self.act_low
+        high = self.act_high
+        while low.dim() < action.dim():
+            low = low.unsqueeze(0)
+            high = high.unsqueeze(0)
+        return torch.max(torch.min(action, high), low)
+
+    def _policy_latent_mean(self, actor_output):
+        if not self.actor_outputs_real_action:
+            return actor_output
+        clipped = self._clip_action_tensor(actor_output)
+        z_mean, _ = self._unsquash_action(clipped)
+        return z_mean
+
+    def _action_mean_from_actor_output(self, actor_output):
+        if self.actor_outputs_real_action:
+            return self._clip_action_tensor(actor_output)
+        action_mean, _ = self._squash_action(actor_output)
+        return action_mean
+
     def _to_critic_obs(self, obs):
         return obs
 
@@ -669,8 +693,9 @@ class PPO:
         V = self.critic(self._to_critic_obs(batch_obs)).squeeze()
 
         # Calculate log probabilities with squashed Gaussian change-of-variables correction.
-        mean = self._actor_forward(batch_obs, batch_obs_qp)  # latent mean
-        dist = self._build_action_dist(mean)
+        actor_output = self._actor_forward(batch_obs, batch_obs_qp)
+        latent_mean = self._policy_latent_mean(actor_output)
+        dist = self._build_action_dist(latent_mean)
         z, u = self._unsquash_action(batch_acts)
         base_log_probs = dist.log_prob(z)
         log_probs = self._squash_log_prob(base_log_probs, u)

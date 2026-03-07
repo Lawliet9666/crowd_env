@@ -13,15 +13,18 @@ from crowd_sim.utils import absolute_obs_to_polar, absolute_obs_to_relative
 
 
 class RLEvalActorAdapter:
-    """Deterministic RL action mapping consistent with PPO tanh-squash."""
+    """Deterministic action mapping for both pure-RL and safety/QP actors."""
 
     def __init__(self, actor, action_space, device):
         self.actor = actor
         self.device = device
+        self.low = np.asarray(action_space.low, dtype=np.float32)
+        self.high = np.asarray(action_space.high, dtype=np.float32)
         low = np.asarray(action_space.low, dtype=np.float32)
         high = np.asarray(action_space.high, dtype=np.float32)
         self.scale = 0.5 * (high - low)
         self.bias = 0.5 * (high + low)
+        self.actor_outputs_real_action = bool(getattr(actor, "outputs_real_action", False))
         self.deterministic = True
 
     def get_action(self, obs):
@@ -40,7 +43,10 @@ class RLEvalActorAdapter:
         if torch.is_tensor(mean):
             mean = mean.detach().cpu().numpy()
         mean = np.asarray(mean, dtype=np.float32).reshape(-1)
-        action = self.bias + self.scale * np.tanh(mean)
+        if self.actor_outputs_real_action:
+            action = np.clip(mean, self.low, self.high)
+        else:
+            action = self.bias + self.scale * np.tanh(mean)
         return action, 1.0
 
     def __getattr__(self, name):

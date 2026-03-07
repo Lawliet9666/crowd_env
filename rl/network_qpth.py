@@ -34,6 +34,7 @@ class BarrierNet(nn.Module):
         self.slack_weight = slack_weight
         self.alpha = alpha
         self.alpha_max = float(kwargs.get("alpha_max", 4.0))
+        self.outputs_real_action = True
         self.actor_obs_dim = int(obs_dim)
         self.qp_obs_dim = int(qp_obs_dim)
         self.qp_start_timesteps = max(0, int(qp_start_timesteps))

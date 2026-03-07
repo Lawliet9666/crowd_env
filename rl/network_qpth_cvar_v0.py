@@ -17,6 +17,7 @@ class BarrierNet(nn.Module):
         self.safe_dist = safe_dist
         self.alpha = alpha   
         self.last_alpha = alpha
+        self.outputs_real_action = True
         self._qp_warm_start = None
 
         self.predictor = TrajPredictor(

@@ -143,6 +143,7 @@ class SAC:
         self._log_action_scale = torch.sum(torch.log(self.action_scale.abs() + 1e-6)).detach()
 
         self.actor = self._build_actor(policy_class).to(self.device)
+        self.actor_outputs_real_action = bool(getattr(self.actor, "outputs_real_action", False))
         log_std_init = float(np.log(max(float(self.action_std_init), 1e-3)))
         self.actor_log_std = nn.Parameter(
             torch.full((self.act_dim,), log_std_init, dtype=torch.float32, device=self.device)
@@ -335,9 +336,10 @@ class SAC:
         return action, logp
 
     def _sample_action(self, obs, obs_qp=None, deterministic=False):
-        mu = self._actor_forward(obs, obs_qp)
-        if mu.dim() == 1:
-            mu = mu.unsqueeze(0)
+        actor_output = self._actor_forward(obs, obs_qp)
+        if actor_output.dim() == 1:
+            actor_output = actor_output.unsqueeze(0)
+        mu = self._policy_latent_mean(actor_output)
         log_std = self.actor_log_std.clamp(LOG_STD_MIN, LOG_STD_MAX).unsqueeze(0).expand_as(mu)
         std = torch.exp(log_std)
         dist = torch.distributions.Normal(mu, std)
@@ -345,10 +347,10 @@ class SAC:
         pre_tanh = mu if deterministic else dist.rsample()
         tanh_out = torch.tanh(pre_tanh)
         action = tanh_out * self.action_scale + self.action_bias
-        mean_action = torch.tanh(mu) * self.action_scale + self.action_bias
+        mean_action = self._action_mean_from_actor_output(actor_output)
 
         if deterministic:
-            return action, None, mean_action
+            return mean_action, None, mean_action
 
         logp = dist.log_prob(pre_tanh).sum(dim=-1, keepdim=True)
         logp -= torch.log(1 - tanh_out.pow(2) + 1e-6).sum(dim=-1, keepdim=True)
@@ -361,6 +363,32 @@ class SAC:
         if obs_qp is None:
             raise ValueError("Hybrid preprocessing requires obs_qp for actor forward.")
         return self.actor(obs_actor, obs_qp)
+
+    def _clip_action_tensor(self, action):
+        low = torch.as_tensor(self.action_low, dtype=action.dtype, device=action.device)
+        high = torch.as_tensor(self.action_high, dtype=action.dtype, device=action.device)
+        while low.dim() < action.dim():
+            low = low.unsqueeze(0)
+            high = high.unsqueeze(0)
+        return torch.max(torch.min(action, high), low)
+
+    def _policy_latent_mean(self, actor_output):
+        if not self.actor_outputs_real_action:
+            return actor_output
+        clipped = self._clip_action_tensor(actor_output)
+        scale = self.action_scale
+        bias = self.action_bias
+        while scale.dim() < clipped.dim():
+            scale = scale.unsqueeze(0)
+            bias = bias.unsqueeze(0)
+        u = (clipped - bias) / scale.clamp_min(1e-6)
+        u = u.clamp(-1.0 + 1e-6, 1.0 - 1e-6)
+        return 0.5 * (torch.log1p(u) - torch.log1p(-u))
+
+    def _action_mean_from_actor_output(self, actor_output):
+        if self.actor_outputs_real_action:
+            return self._clip_action_tensor(actor_output)
+        return torch.tanh(actor_output) * self.action_scale + self.action_bias
 
     def _update_step(self):
         obs, act, rew, next_obs, done, obs_qp, next_obs_qp = self.replay_buffer.sample(self.batch_size)
@@ -411,7 +439,8 @@ class SAC:
             self._soft_update(self.q2, self.q2_target)
 
         with torch.no_grad():
-            mu = self._actor_forward(obs, obs_qp)
+            actor_output = self._actor_forward(obs, obs_qp)
+            mu = self._action_mean_from_actor_output(actor_output)
             log_std = self.actor_log_std.clamp(LOG_STD_MIN, LOG_STD_MAX)
             sigma = torch.exp(log_std)
 
