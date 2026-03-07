@@ -182,6 +182,10 @@ def _compose_frames(env_frames, metrics, dt, env=None):
         axis_label_fs = 14
         tick_fs = 12
         legend_fs = 10
+        beta_color = "#f4a3a3"    # light red
+        radius_color = "#8ecae6"  # light blue
+        u0_color = "#f6bd60"      # light orange
+        u1_color = "#9ad29a"      # light green
 
         ax_env = fig.add_subplot(gs[:, 0])
         ax_env.imshow(env_frames[t])
@@ -193,18 +197,18 @@ def _compose_frames(env_frames, metrics, dt, env=None):
         for ax in (ax1, ax2, ax3):
             ax.tick_params(axis="both", labelsize=tick_fs)
 
-        ax1.plot(time_axis[:t+1], beta_series[:t+1], color="tab:blue")
+        ax1.plot(time_axis[:t+1], beta_series[:t+1], color=beta_color)
         ax1.set_title(r"$\beta$", fontsize=title_fs)
         ax1.set_ylim(0.0, 1.0)
         ax1.grid(True, alpha=0.2)
 
-        ax2.plot(time_axis[:t+1], delta_r_series[:t+1], color="tab:purple")
-        ax2.set_title(r"$\Delta R$", fontsize=title_fs)
+        ax2.plot(time_axis[:t+1], delta_r_series[:t+1], color=radius_color)
+        ax2.set_title(r"$R$", fontsize=title_fs)
         ax2.grid(True, alpha=0.2)
         ax2.set_ylim(0.7, 1.6)
 
-        ax3.plot(time_axis[:t+1], u_series[:t+1, 0], label=r"$u[0]$", color="tab:orange")
-        ax3.plot(time_axis[:t+1], u_series[:t+1, 1], label=r"$u[1]$", color="tab:green")
+        ax3.plot(time_axis[:t+1], u_series[:t+1, 0], label=r"$u[0]$", color=u0_color)
+        ax3.plot(time_axis[:t+1], u_series[:t+1, 1], label=r"$u[1]$", color=u1_color)
         ax3.set_title(r"$u$", fontsize=title_fs)
         ax3.set_xlabel(r"$t$ (s)", fontsize=axis_label_fs)
         ax3.grid(True, alpha=0.2)
@@ -245,12 +249,22 @@ def _render_step(env, frames):
         env.render()
 
 
-def _record_actor_metrics(metrics, actor):
+def _record_actor_metrics(metrics, actor, env=None):
     if metrics is None:
         return
 
-    metrics["beta"].append(getattr(actor, "last_beta", getattr(actor, "beta", None)))
-    metrics["delta_r"].append(getattr(actor, "last_r_safe", getattr(actor, "safe_dist", None)))
+    beta_val = getattr(actor, "last_beta", getattr(actor, "beta", None))
+    r_val = getattr(actor, "last_r_safe", getattr(actor, "safe_dist", None))
+    metrics["beta"].append(beta_val)
+    metrics["delta_r"].append(r_val)
+
+    if env is not None:
+        env_ref = getattr(env, "unwrapped", env)
+        r_scalar = _safe_scalar(r_val, default=np.nan)
+        if np.isfinite(r_scalar) and r_scalar > 0.0:
+            env_ref.viz_safe_radius = float(r_scalar)
+        else:
+            env_ref.viz_safe_radius = None
 
 
 def _record_executed_action(metrics, env, fallback_action):
@@ -282,6 +296,8 @@ def run_one_episode(
         obs, _ = env.reset()
     else:
         obs, _ = env.reset(seed=seed, options=reset_options)
+    env_ref = getattr(env, "unwrapped", env)
+    env_ref.viz_safe_radius = None
     _reset_actor_episode_cache(actor)
 
     done = False
@@ -298,15 +314,14 @@ def run_one_episode(
     while not done:
         ep_len += 1
 
-        if collect_frames:
-            _render_step(env, frames)
-
         action = _compute_action(
             actor,
             obs,
             obs_preprocess_fn=obs_preprocess_fn,
         )
-        _record_actor_metrics(metrics, actor)
+        _record_actor_metrics(metrics, actor, env=env)
+        if collect_frames:
+            _render_step(env, frames)
         if bool(getattr(actor, "infeasible", False)):
             ep_infeasible = True
             _record_executed_action(metrics, env, action)

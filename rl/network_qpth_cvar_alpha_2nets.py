@@ -25,7 +25,7 @@ class BarrierNet(BarrierNetV1):
         qp_obs_dim,
         alpha_hidden1=128,
         alpha_hidden2=64,
-        alpha_max=2.0,
+        alpha_max=4.0,
         **kwargs,
     ):
         super().__init__(obs_dim=obs_dim, act_dim=act_dim, qp_obs_dim=qp_obs_dim, **kwargs)

@@ -258,8 +258,8 @@ Use this to evaluate all actor checkpoints under one run folder with fixed seeds
   episodes_per_seed=50
 
   python eval/eval_batch.py \
-  method=rlcvarbetaradius_2nets \
-  actor_model=trained_models/default2/v2_rl_cvar_bf_adaptive_beta09-unicycle-rlcvarbetaradius_2nets-ppo-bs8192-ep8-mbsz512-k1-env32-annA0B0R0 \
+  method=rlcvarbetaradiusalpha_2nets \
+  actor_model=trained_models/default2/v2_rl_cvar_bf_adaptive_beta09-unicycle-rlcvarbetaradiusalpha_2nets-ppo-bs8192-ep8-mbsz512-k1-env32-annA0B0R0 \
   episodes_per_seed=50
 ```
 

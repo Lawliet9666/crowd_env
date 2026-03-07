@@ -169,6 +169,7 @@ class SocialNav(gym.Env):
         self.robot_traj = []
         self.human_trajs = [[] for _ in range(self.num_humans)]
         self.human_traj_steps = []
+        self.viz_safe_radius = None
         
         # 3. Initialize Robot State (Position, Goal, Theta)
         (
@@ -638,10 +639,48 @@ class SocialNav(gym.Env):
         # Draw Robot
         robot = plt.Circle(self.robot_pos, self.robot_radius, color='blue', alpha=0.5)
         self.ax.add_artist(robot)
+
+        # Draw current learned safety bubble (from evaluator, if provided).
+        safe_r = getattr(self, "viz_safe_radius", None)
+        if safe_r is not None:
+            try:
+                safe_r = float(safe_r)
+                # The learned R is a center-distance threshold that includes obstacle radius.
+                # For visualization with obstacle disks already drawn, show a non-inflated
+                # robot-side bubble by removing nominal obstacle radius.
+                human_ref_r = float(getattr(self, "human_radius_max", 0.0))
+                margin = max(safe_r - float(self.robot_radius) - human_ref_r, 0.0)
+                safe_r_display = float(self.robot_radius) + margin
+                if np.isfinite(safe_r_display) and safe_r_display > 0.0:
+                    bubble = plt.Circle(
+                        self.robot_pos,
+                        safe_r_display,
+                        edgecolor='tab:red',
+                        facecolor='none',
+                        linestyle='--',
+                        linewidth=1.8,
+                        alpha=0.75,
+                    )
+                    self.ax.add_artist(bubble)
+            except Exception:
+                pass
         
         # Draw Humans
+        danger_idx = None
+        if self.num_humans > 0:
+            rel = np.asarray(self.human_positions, dtype=float) - np.asarray(self.robot_pos, dtype=float)[None, :]
+            dists = np.linalg.norm(rel, axis=1)
+            radii = np.asarray(self.human_radii, dtype=float).reshape(-1)
+            if radii.size != dists.size:
+                radii = np.full((dists.size,), float(self.human_radius_max), dtype=float)
+            clearances = dists - float(self.robot_radius) - radii
+            danger_idx = int(np.argmin(clearances))
+
         for i in range(self.num_humans):
-            human = plt.Circle(self.human_positions[i], self.human_radii[i], color='gray', alpha=0.5)
+            if danger_idx is not None and i == danger_idx:
+                human = plt.Circle(self.human_positions[i], self.human_radii[i], color='#f4a3a3', alpha=0.85)
+            else:
+                human = plt.Circle(self.human_positions[i], self.human_radii[i], color='gray', alpha=0.5)
             self.ax.add_artist(human)
 
         # self.ax.grid(True, linestyle='--', alpha=0.5)
