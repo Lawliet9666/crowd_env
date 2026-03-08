@@ -21,3 +21,4 @@ __pycache__/
 /il/demos/
 /il/bc_pretrain/
 /outputs/
+/crowd_nav_rl.egg-info/

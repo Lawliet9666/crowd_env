@@ -7,8 +7,8 @@ farest_dist: 5
 obs_dim: ${math:3+${env.topk}*4} # robot + topk humans
 act_dim: 2
 
-act_low: [-1, -1.570796326795]
-act_high: [1, 1.570796326795]
+act_low: [-1.5, -1.570796326795]
+act_high: [1.5, 1.570796326795]
 
 success_reward: 20
 collision_penalty: -20

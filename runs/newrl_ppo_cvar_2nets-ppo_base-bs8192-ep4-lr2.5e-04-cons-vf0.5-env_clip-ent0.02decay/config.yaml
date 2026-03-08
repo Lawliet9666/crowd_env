@@ -1,0 +1,87 @@
+seed: 0
+device: cuda
+wandb_entity: xinywa_umich
+wandb_project: newrl_ppo
+wandb_interval: 10
+run_name: newrl_ppo_cvar_2nets
+save_dir: runs
+overwrite: false
+env:
+  env_id: social_nav_var_num_ploar
+  type: crowdsim
+  topk: 5
+  farest_dist: 5
+  obs_dim: ${math:3+${env.topk}*4}
+  act_dim: 2
+  act_low:
+  - -1
+  - -1.570796326795
+  act_high:
+  - 1
+  - 1.570796326795
+  success_reward: 20
+  collision_penalty: -20
+  potential_factor: 3.0
+  constant_penalty: -0.025
+model:
+  _target_: new_rl.model.ppo_base.ActorCritic
+  type: ppo_base
+  method: ${method}
+  obs_dim: ${env.obs_dim}
+  act_dim: ${env.act_dim}
+  act_low: ${env.act_low}
+  act_high: ${env.act_high}
+  actor_mlp_config: ${model.actor.mlp}
+  critic_mlp_config: ${model.critic.mlp}
+  use_obs_norm: ${trainer.use_obs_norm}
+  use_return_norm: ${trainer.use_return_norm}
+  qp_start_timesteps: 0
+  policy_kwargs:
+    nHidden1: 256
+    nHidden21: 256
+    nHidden22: 256
+    alpha_hidden1: 128
+    alpha_hidden2: 64
+  actor:
+    mlp:
+      hidden_sizes:
+      - 64
+      - 64
+      act: silu
+  critic:
+    mlp:
+      hidden_sizes:
+      - 64
+      - 64
+      act: silu
+trainer:
+  total_steps: 20000000
+  batch_size: 8192
+  num_envs: 32
+  minibatch_size: 256
+  update_epochs: 4
+  gamma: 0.99
+  gae_lambda: 0.95
+  lr: 0.00025
+  lr_min: 2.5e-05
+  lr_schedule: constant
+  clip_coef: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.02
+  ent_coef_min: 0.002
+  ent_coef_decay: true
+  max_grad_norm: 0.5
+  action_bound_method: env_clip
+  use_obs_norm: true
+  use_return_norm: true
+  return_scale_only: true
+  use_adv_norm: true
+  clip_vloss: true
+  recompute_adv: true
+  eval_interval: 100
+  eval_episodes: 20
+  use_cirriculum: false
+  initial_human_num: 4
+  increase_human_num: 4
+  max_human_num: 20
+method: rlcvarbetaradius_2nets
