@@ -5,19 +5,19 @@ wandb_project: newrl_ppo
 wandb_interval: 10
 run_name: newrl_ppo_cvar_2nets
 save_dir: runs
-overwrite: false
+overwrite: true
 env:
   env_id: social_nav_var_num_ploar
   type: crowdsim
-  topk: 5
+  topk: 1
   farest_dist: 5
   obs_dim: ${math:3+${env.topk}*4}
   act_dim: 2
   act_low:
-  - -1
+  - -1.5
   - -1.570796326795
   act_high:
-  - 1
+  - 1.5
   - 1.570796326795
   success_reward: 20
   collision_penalty: -20

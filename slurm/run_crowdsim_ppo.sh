@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=rl_cvar_bf_adaptive
+#SBATCH --job-name=v2_rl_cvar_bf_adaptive
 #SBATCH --account=chaijy2
 #SBATCH --partition=spgpu
 #SBATCH --nodes=1
@@ -21,23 +21,28 @@ unset TRANSFORMERS_CACHE
 
 export WANDB_API_KEY=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
 
-srun --jobid $SLURM_JOBID bash -c 'python main_vec.py run_name=rl_cvar_bf_adaptive trainer=ppo method=rlcbfgamma total_timesteps=20_000_000 num_envs=8 obs_topk=1'
+srun --jobid $SLURM_JOBID bash -c 'python main_vec.py run_name=v2_rl_cvar_bf_adaptive_beta09 trainer=ppo method=rl total_timesteps=20_000_000 num_envs=8 obs_topk=5'
 # sbatch /home/daiyp/CODE/crowd_env/slurm/run_crowdsim_ppo.sh
 # squeue -a | grep daiyp 
 # scancel 44347755
 
 
-# python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcbfgamma total_timesteps=5_000_000 num_envs=8 obs_topk=1
-# python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcbfgamma_2nets total_timesteps=5_000_000 num_envs=8 obs_topk=1
-# python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcvarbetaradius total_timesteps=5_000_000 num_envs=8 obs_topk=1
-# python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcvarbetaradius_2nets total_timesteps=5_000_000 num_envs=8 obs_topk=1
-# python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcvarbetaradius_2nets_risk total_timesteps=5_000_000 num_envs=8 obs_topk=1
+# python main_vec.py trainer=ppo method=rlcbfgamma total_timesteps=20_000_000 num_envs=8 obs_topk=1 annealing_learning_alpha=true  
+# python main_vec.py trainer=ppo method=rlcbfgamma_2nets total_timesteps=20_000_000 num_envs=8 obs_topk=1
+# python main_vec.py trainer=ppo method=rlcbfgamma_2nets_risk total_timesteps=20_000_000 num_envs=8 obs_topk=1
 
-# python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcvarbetaradius_2nets total_timesteps=5_000_000 num_envs=8 obs_topk=5
-# python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcvarbetaradius total_timesteps=5_000_000 num_envs=8 obs_topk=5
-# python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcbfgamma_2nets total_timesteps=5_000_000 num_envs=8 obs_topk=5
-# python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcbfgamma total_timesteps=5_000_000 num_envs=8 obs_topk=5
-# python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rlcbfgamma_2nets_risk total_timesteps=5_000_000 num_envs=8 obs_topk=5
+# python main_vec.py trainer=ppo method=rlcvarbetaradius total_timesteps=20_000_000 num_envs=8 obs_topk=1 annealing_learning_beta=true annealing_learning_radius=true
+# python main_vec.py trainer=ppo method=rlcvarbetaradius_2nets total_timesteps=20_000_000 num_envs=8 obs_topk=1
+# python main_vec.py trainer=ppo method=rlcvarbetaradius_2nets_risk total_timesteps=20_000_000 num_envs=8 obs_topk=1
+# python main_vec.py trainer=ppo method=rlcvarbetaradiusalpha_2nets total_timesteps=20_000_000 num_envs=8 obs_topk=1
+# python main_vec.py trainer=ppo method=rlcvarbetaradiusalpha_2nets_risk total_timesteps=20_000_000 num_envs=8 obs_topk=1
+
+
+# python main_vec.py trainer=ppo method=rlcvarbetaradius_2nets total_timesteps=20_000_000 num_envs=8 obs_topk=5
+# python main_vec.py trainer=ppo method=rlcvarbetaradius total_timesteps=20_000_000 num_envs=8 obs_topk=5
+# python main_vec.py trainer=ppo method=rlcbfgamma_2nets total_timesteps=20_000_000 num_envs=8 obs_topk=5
+# python main_vec.py trainer=ppo method=rlcbfgamma total_timesteps=20_000_000 num_envs=8 obs_topk=5
+# python main_vec.py trainer=ppo method=rlcbfgamma_2nets_risk total_timesteps=20_000_000 num_envs=8 obs_topk=5
 
 
 #ls -l /home/daiyp/CODE/crowd_env/trained_models
