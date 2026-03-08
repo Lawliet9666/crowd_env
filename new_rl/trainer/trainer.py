@@ -62,7 +62,7 @@ class Trainer:
         return bool(self.config.trainer.use_cirriculum)
     
     def setup_wandb(self):
-        run_name = self.config.run_name + "-" + self.config.model.type +  \
+        run_name = self.config.run_name + "-" + self.config.model.type + "-" + self._get_method() + \
             f"-bs{self.batch_size}-ep{self.config.trainer.update_epochs}-lr{self.config.trainer.lr:.1e}-{self.config.trainer.lr_schedule[:4]}-vf{self.config.trainer.vf_coef}-{self.config.trainer.action_bound_method}"
         
         self.human_num = self.config.trainer.max_human_num
