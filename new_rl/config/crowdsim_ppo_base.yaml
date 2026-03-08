@@ -5,6 +5,8 @@ defaults:
   - trainer: ppo
   - _self_
 
+method: rl
+
 model:
   actor:
     mlp:

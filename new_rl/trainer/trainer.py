@@ -18,6 +18,13 @@ import gymnasium as gym
 import shutil
 
 
+PPO_METHOD_NEEDS_QP_RELATIVE = {
+    "rlcbfgamma",
+    "rlcvarbetaradius",
+    "rlcbfgamma_2nets",
+    "rlcvarbetaradius_2nets",
+}
+
 
 class Trainer:
     def __init__(self, config: DictConfig):
@@ -37,6 +44,16 @@ class Trainer:
         self.setup_wandb()
         self.setup_env()
         self.setup_model_and_optimizer() 
+
+    def _get_method(self) -> str:
+        if "method" in self.config:
+            return str(self.config.method).strip()
+        if "method" in self.config.model:
+            return str(self.config.model.method).strip()
+        return "rl"
+
+    def _needs_qp_relative(self) -> bool:
+        return self._get_method() in PPO_METHOD_NEEDS_QP_RELATIVE
 
     def _get_curriculum_enabled(self) -> bool:
         # Keep backward compatibility with the existing misspelled config key.
@@ -111,13 +128,59 @@ class Trainer:
     def setup_model_and_optimizer(self):
         if self.config.model.type == "ppo_base":
             from new_rl.model.ppo_base import ActorCritic
+            if str(self.config.trainer.action_bound_method) != "env_clip":
+                raise ValueError(
+                    "new_rl PPOBase currently expects trainer.action_bound_method='env_clip'."
+                )
+            policy_kwargs = None
+            if "policy_kwargs" in self.config.model and self.config.model.policy_kwargs is not None:
+                policy_kwargs = OmegaConf.to_container(self.config.model.policy_kwargs, resolve=True)
+
+            safe_dist = 0.8
+            alpha = 2.0
+            beta = 0.2
+            robot_type = "single_integrator"
+            vmax = 3.0
+            amax = 3.0
+            omega_max = 3.0
+            qp_obs_dim = None
+
+            if getattr(self, "crowd_sim_config", None) is not None:
+                safe_dist = float(
+                    self.crowd_sim_config.controller.safety_margin
+                    + self.crowd_sim_config.human.radius
+                    + self.crowd_sim_config.robot.radius
+                )
+                alpha = float(self.crowd_sim_config.controller.cbf_alpha)
+                beta = float(self.crowd_sim_config.controller.cvar_beta)
+                robot_type = str(self.crowd_sim_config.robot.type)
+                vmax = float(self.crowd_sim_config.robot.vmax)
+                amax = float(self.crowd_sim_config.robot.amax)
+                omega_max = float(self.crowd_sim_config.robot.omega_max)
+                if self._needs_qp_relative():
+                    qp_obs_dim = int(6 + 6 * int(self.config.env.topk))
+
             self.model = ActorCritic(
                 obs_dim=self.config.env.obs_dim,
+                env_obs_dim=self.obs_dim,
                 act_dim=self.config.env.act_dim,
+                act_low=self.config.env.act_low,
+                act_high=self.config.env.act_high,
                 actor_mlp_config=self.config.model.actor.mlp,
                 critic_mlp_config=self.config.model.critic.mlp,
                 use_obs_norm=self.config.trainer.use_obs_norm,
                 use_return_norm=self.config.trainer.use_return_norm,
+                method=self._get_method(),
+                qp_obs_dim=qp_obs_dim,
+                qp_start_timesteps=int(self.config.model.get("qp_start_timesteps", 0)),
+                safe_dist=safe_dist,
+                alpha=alpha,
+                beta=beta,
+                robot_type=robot_type,
+                vmax=vmax,
+                amax=amax,
+                omega_max=omega_max,
+                policy_kwargs=policy_kwargs,
             )
             self.model.to(self.device)
             self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.trainer.lr)
@@ -157,6 +220,7 @@ class Trainer:
             from new_rl.env_wrapper.crowdsim import CrowdSimConfig, build_env
             self.crowd_sim_config = CrowdSimConfig()
             self.crowd_sim_config.env.max_obstacles_obs = 20
+            self.hybrid_obs_enabled = self.config.model.type == "ppo_base" and self._needs_qp_relative()
             success_reward = self.config.env.success_reward
             collision_penalty = self.config.env.collision_penalty
             potential_factor = self.config.env.potential_factor
@@ -185,9 +249,13 @@ class Trainer:
                     env.reset(seed=self.config.seed + seed_offset)
                     return env
                 return _init
+            env_id = str(self.config.env.env_id)
+            if self.hybrid_obs_enabled and env_id.startswith("social_nav_var_num"):
+                env_id = "social_nav_var_num_hybrid"
+            self.runtime_env_id = env_id
             print(f"Initializing env with {self.human_num} humans")
             self.train_envs = AsyncVectorEnv(
-                [make_env_fn(self.crowd_sim_config, self.config.env.env_id, i) for i in range(num_envs)]
+                [make_env_fn(self.crowd_sim_config, self.runtime_env_id, i) for i in range(num_envs)]
             )
             self.make_env_fn = make_env_fn
         
@@ -200,12 +268,16 @@ class Trainer:
         self.obs_dim = self.observation_space.shape[0]
         self.act_dim = self.action_space.shape[0]
         
-        print(f"Train on environment {self.config.env.env_id}")
+        print(f"Train on environment {getattr(self, 'runtime_env_id', self.config.env.env_id)}")
         print(f"\tObservation space: {self.observation_space}")
         print(f"\tObs dim: {self.obs_dim}")
         print(f"\tAction space: {self.action_space}")
         print(f"\tAct dim: {self.act_dim}")
-        assert self.obs_dim == self.config.env.obs_dim, "obs_dim mismatch"
+        if getattr(self, "hybrid_obs_enabled", False):
+            expected_obs_dim = int(self.config.env.obs_dim + 6 + 6 * int(self.config.env.topk))
+            assert self.obs_dim == expected_obs_dim, "hybrid obs_dim mismatch"
+        else:
+            assert self.obs_dim == self.config.env.obs_dim, "obs_dim mismatch"
         assert self.act_dim == self.config.env.act_dim, "act_dim mismatch"
 
         assert np.allclose(self.action_low, self.config.env.act_low), "action_low mismatch"
@@ -224,7 +296,7 @@ class Trainer:
         self.crowd_sim_config.human.num_humans = self.human_num
         self.train_envs = AsyncVectorEnv(
             [
-                self.make_env_fn(self.crowd_sim_config, self.config.env.env_id, i)
+                self.make_env_fn(self.crowd_sim_config, self.runtime_env_id, i)
                 for i in range(self.config.trainer.num_envs)
             ]
         )
@@ -236,8 +308,10 @@ class Trainer:
     def eval(self, episodes: int = 10):
         """Evaluate policy deterministically (mean action) in a single env."""
         self.model.eval()
+        if hasattr(self.model, "set_timestep"):
+            self.model.set_timestep(int(self.config.trainer.total_steps))
         if self.config.env.type == "crowdsim":
-            env = self.make_env_fn(self.crowd_sim_config, self.config.env.env_id, 0)()
+            env = self.make_env_fn(self.crowd_sim_config, self.runtime_env_id, 0)()
         else:
             env = self.make_env_fn(0)()
         returns = []

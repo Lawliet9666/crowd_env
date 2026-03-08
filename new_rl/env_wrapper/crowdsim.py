@@ -3,6 +3,7 @@ import os
 import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from config.config import Config as CrowdSimConfig
+from crowd_sim.utils import absolute_obs_to_polar, absolute_obs_to_relative
 from crowd_sim.env.social_nav import SocialNav
 from crowd_sim.env.social_nav_var_num import SocialNavVarNum
 from gymnasium import spaces
@@ -93,6 +94,38 @@ class SocialNavVarNumPloar(SocialNavVarNum):
         return self._preprocess_obs(obs), reward, done, truncated, info
 
 
+class SocialNavVarNumHybrid(SocialNavVarNum):
+    """Return concatenated actor polar obs and QP relative obs."""
+
+    def __init__(self, *args, topk: int = 5, farest_dist: float = 6.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.topk = int(topk)
+        self.farest_dist = float(farest_dist)
+        self.actor_obs_dim = 3 + self.topk * 4
+        self.qp_obs_dim = 6 + self.topk * 6
+        self.obs_dim = self.actor_obs_dim + self.qp_obs_dim
+        self.observation_space = spaces.Box(
+            low=-np.inf, high=np.inf, shape=(self.obs_dim,), dtype=np.float32
+        )
+
+    def _preprocess_obs(self, obs: np.ndarray) -> np.ndarray:
+        polar_obs = absolute_obs_to_polar(
+            obs,
+            topk=self.topk,
+            farest_dist=self.farest_dist,
+        )
+        relative_obs = absolute_obs_to_relative(obs, topk=self.topk)
+        return np.concatenate([polar_obs, relative_obs]).astype(np.float32)
+
+    def reset(self, *args, **kwargs):
+        obs, info = super().reset(*args, **kwargs)
+        return self._preprocess_obs(obs), info
+
+    def step(self, action):
+        obs, reward, done, truncated, info = super().step(action)
+        return self._preprocess_obs(obs), reward, done, truncated, info
+
+
 def build_env(env_name: str, render_mode: str, config: CrowdSimConfig, *args, **kwargs):
     if env_name == "social_nav":
         return SocialNav(render_mode=render_mode, config_file=config)
@@ -102,6 +135,15 @@ def build_env(env_name: str, render_mode: str, config: CrowdSimConfig, *args, **
         topk = kwargs.get("topk", 5)
         farest_dist = kwargs.get("farest_dist", 5)
         return SocialNavVarNumPloar(
+            render_mode=render_mode,
+            config_file=config,
+            topk=topk,
+            farest_dist=farest_dist,
+        )
+    if env_name == "social_nav_var_num_hybrid":
+        topk = kwargs.get("topk", 5)
+        farest_dist = kwargs.get("farest_dist", 5)
+        return SocialNavVarNumHybrid(
             render_mode=render_mode,
             config_file=config,
             topk=topk,

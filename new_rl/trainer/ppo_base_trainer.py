@@ -61,11 +61,15 @@ class PPOBaseTrainer(Trainer):
         for step in range(steps_per_env):
             global_step += cfg.num_envs
 
-            if obs_normalizer is not None:
+            if hasattr(model, "update_obs_normalizer"):
+                model.update_obs_normalizer(obs_np)
+            elif obs_normalizer is not None:
                 obs_normalizer.update(obs_np)
             obs_t = torch.tensor(obs_np, dtype=torch.float32, device=device)
 
             with torch.no_grad():
+                if hasattr(model, "set_timestep"):
+                    model.set_timestep(global_step)
                 action, logp, _, value = model.get_action_and_value(obs_t)
 
             action_np = map_action_to_env(action.cpu().numpy(), action_low, action_high, cfg.action_bound_method)
@@ -308,7 +312,7 @@ class PPOBaseTrainer(Trainer):
         action_low = np.asarray(action_space.low, dtype=np.float32)
         action_high = np.asarray(action_space.high, dtype=np.float32)
         
-        obs_buf = torch.zeros((self.steps_per_env, self.config.trainer.num_envs, self.config.env.obs_dim), dtype=torch.float32, device=self.device)
+        obs_buf = torch.zeros((self.steps_per_env, self.config.trainer.num_envs, self.obs_dim), dtype=torch.float32, device=self.device)
         act_buf = torch.zeros((self.steps_per_env, self.config.trainer.num_envs, self.config.env.act_dim), dtype=torch.float32, device=self.device)
         logp_buf = torch.zeros((self.steps_per_env, self.config.trainer.num_envs), dtype=torch.float32, device=self.device)
         rew_buf = torch.zeros((self.steps_per_env, self.config.trainer.num_envs), dtype=torch.float32, device=self.device)
