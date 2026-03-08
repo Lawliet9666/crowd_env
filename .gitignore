@@ -22,3 +22,5 @@ __pycache__/
 /il/bc_pretrain/
 /outputs/
 /crowd_nav_rl.egg-info/
+/xy_runs/
+/runs/

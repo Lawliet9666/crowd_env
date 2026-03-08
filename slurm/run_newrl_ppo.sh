@@ -13,6 +13,7 @@ python scripts/run_crowdsim_ppo_base.py \
   trainer.minibatch_size=256 \
   trainer.num_envs=32 \
   env.topk=1 \
+  save_dir=xy_runs \
   overwrite=true
 
 
