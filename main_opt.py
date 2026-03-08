@@ -24,26 +24,26 @@ VALID_METHODS = {
 VALID_TEST_MODES = {"eval", "crossing", "both"}
 
 
-def _build_scenario_output_name(config: Config) -> str:
+def _build_scenario_output_name(config: Config, eval_seed=None) -> str:
     robot_type = str(config.robot.get("type", "robot"))
     obstacle_count = int(config.human.get("num_humans", 0))
     vmax = float(config.robot.get("vmax", 0.0))
     omega_max = float(config.robot.get("omega_max", 0.0))
-    return f"{robot_type}_obs_{obstacle_count}_vmax_{vmax:g}_omegamax_{omega_max:g}"
+    name = f"{robot_type}_obs_{obstacle_count}_vmax_{vmax:g}_omegamax_{omega_max:g}"
+    if eval_seed is not None:
+        name += f"_evalseed_{int(eval_seed)}"
+    return name
 
 
-def _prepare_save_dirs(cfg: DictConfig, config: Config):
-    actor_model = str(cfg.get("actor_model", "") or "").strip()
-    if actor_model:
-        base_dir = os.path.dirname(os.path.abspath(actor_model))
-    else:
-        base_dir = os.path.join(
-            "trained_models",
-            str(cfg.model_folder),
-        )
+def _prepare_save_dirs(cfg: DictConfig, config: Config, method: str, eval_seed=None):
+    base_dir = os.path.join(
+        "trained_models",
+        str(cfg.model_folder),
+        method,
+    )
     save_dir = os.path.join(
         base_dir,
-        _build_scenario_output_name(config),
+        _build_scenario_output_name(config, eval_seed=eval_seed),
     )
     os.makedirs(save_dir, exist_ok=True)
     return base_dir, save_dir
@@ -68,12 +68,11 @@ def main(cfg: DictConfig):
     render_mode = "human" if bool(cfg.render) else "rgb_array"
     env = build_env(env_name, render_mode=render_mode, config=config)
     controller = build_robot_controller(method, config, env)
-    base_save_dir, save_dir = _prepare_save_dirs(cfg, config)
+    eval_seed = int(cfg.seed) if cfg.eval_seed is None else int(cfg.eval_seed)
+    base_save_dir, save_dir = _prepare_save_dirs(cfg, config, method, eval_seed=eval_seed)
     dump_test_config(save_dir, config, extra={"eval_seed": cfg.eval_seed, "method": method})
     print(f"Evaluation base dir: {base_save_dir}", flush=True)
     print(f"Evaluation outputs: {save_dir}", flush=True)
-
-    eval_seed = int(cfg.seed) if cfg.eval_seed is None else int(cfg.eval_seed)
 
     try:
         if test_mode in ("eval", "both"):

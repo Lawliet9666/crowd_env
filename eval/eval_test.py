@@ -49,7 +49,7 @@ ANNEAL_PARAM_KEYS = (
 )
 
 
-def _resolve_eval_save_path(actor_model: str, save_path: str | None, cfg: Config) -> str:
+def _resolve_eval_save_path(actor_model: str, save_path: str | None, cfg: Config, base_seed=None) -> str:
     if save_path is not None and str(save_path).strip():
         return str(save_path)
     actor_dir = os.path.dirname(os.path.abspath(actor_model))
@@ -58,8 +58,9 @@ def _resolve_eval_save_path(actor_model: str, save_path: str | None, cfg: Config
     vmax = float(cfg.robot.get("vmax", 0.0))
     omega_max = float(cfg.robot.get("omega_max", 0.0))
     folder = f"{robot_type}_obs_{obstacle_count}_vmax_{vmax:g}_omegamax_{omega_max:g}"
+    if base_seed is not None:
+        folder += f"_evalseed_{int(base_seed)}"
     return os.path.join(actor_dir, folder)
-
 
 def run_policy_test(
     env,
@@ -107,7 +108,7 @@ def run_policy_test(
     policy.eval()
 
     actor = RLEvalActorAdapter(policy, env.action_space, device)
-    save_path = _resolve_eval_save_path(actor_model, save_path, cfg=cfg)
+    save_path = _resolve_eval_save_path(actor_model, save_path, cfg=cfg, base_seed=base_seed)
     obs_preprocess_fn = build_obs_preprocess_fn(
         obs_topk=int(obs_topk),
         obs_farest_dist=float(obs_farest_dist),
@@ -195,7 +196,7 @@ def main(cfg_args: DictConfig):
             needs_qp_relative=needs_qp_relative,
             test_episodes=int(cfg_args.test_ep),
             test_viz_episodes=int(cfg_args.test_viz_ep),
-            base_seed=(None if cfg_args.eval_seed is None else int(cfg_args.eval_seed)),
+            base_seed=int(cfg_args.eval_seed),
             save_path=(save_path_value or None),
             test_mode=test_mode,
             algo=(algo_value or None),

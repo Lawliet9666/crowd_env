@@ -203,7 +203,7 @@ python main_vec.py run_name=rl_cvar_bf_adaptive trainer=sac method=rl total_time
 Run non-RL controllers:
 
 ```bash
-python main_opt.py method=cbfqp test_mode=both test_ep=100 test_viz_ep=20
+python main_opt.py method=cbfqp test_mode=both test_ep=100 test_viz_ep=50 eval_seed=100
 ```
 
 - Output directory:
@@ -223,10 +223,10 @@ Use this for one actor checkpoint.
 ```bash
 python eval/eval_test.py \
   method=rl \
-  actor_model=trained_models/default/rl_cvar_bf_adaptive-unicycle-rl-ppo-bs8192-ep8-mbsz512-k1-env8_1/ppo_actor_best.pth \
+  actor_model=trained_models/default2/rl_cvar_bf_adaptive-unicycle-rl-ppo-bs8192-ep8-mbsz512-k1-env8_1/ppo_actor_best.pth \
   test_mode=both \
   test_ep=100 \
-  test_viz_ep=10 \
+  test_viz_ep=50 \
   eval_seed=100 \
   obs_topk=1
 
